@@ -1,0 +1,111 @@
+{
+  "version": "0.1",
+  "name": "portfolio-analytics-manifest",
+  "description": "Manifest listing portfolio concentration calculation tools using live market prices.",
+  "tools": [
+    {
+      "name": "calculate_position_concentration",
+      "description": "Calculates position-level concentration metrics using live Yahoo Finance prices. Returns the portfolio value, Herfindahl-Hirschman Index (HHI), top-N concentration, and normalized position weights.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "portfolio": {
+            "type": "object",
+            "description": "Customer portfolio containing ID, name, and list of investments",
+            "properties": {
+              "customer_id": {
+                "type": "string",
+                "description": "Unique identifier for the customer"
+              },
+              "customer_name": {
+                "type": "string",
+                "description": "Name of the customer"
+              },
+              "investments": {
+                "type": "array",
+                "description": "List of the customer's portfolio investments",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["stocks", "crypto", "mutual_funds"],
+                      "description": "Type of investment asset"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "description": "Ticker symbol (for stocks and crypto only)"
+                    },
+                    "quantity": {
+                      "type": "number",
+                      "description": "Number of units held (for stocks or crypto)"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Name of mutual fund (if applicable)"
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Estimated value of mutual fund investment"
+                    }
+                  },
+                  "required": ["type"],
+                  "oneOf": [
+                    { "required": ["symbol", "quantity"] },
+                    { "required": ["name", "value"] }
+                  ]
+                }
+              },
+              "last_updated": {
+                "type": "string",
+                "description": "Last update timestamp in ISO 8601 format"
+              }
+            },
+            "required": ["customer_id", "customer_name", "investments"]
+          },
+          "top_n": {
+            "type": "integer",
+            "default": 5,
+            "description": "Number of top holdings to include in the concentration metric"
+          }
+        },
+        "required": ["portfolio"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "portfolio_value": {
+            "type": "number",
+            "description": "Total calculated market value of the portfolio"
+          },
+          "hhi": {
+            "type": "number",
+            "description": "Herfindahl-Hirschman Index representing concentration"
+          },
+          "top_n_concentration": {
+            "type": "number",
+            "description": "Sum of weights of the top-N largest positions"
+          },
+          "positions": {
+            "type": "array",
+            "description": "List of portfolio positions sorted by descending weight",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "weight": { "type": "number" }
+              },
+              "required": ["name", "weight"]
+            }
+          }
+        },
+        "required": [
+          "portfolio_value",
+          "hhi",
+          "top_n_concentration",
+          "positions"
+        ]
+      }
+    }
+  ]
+}
