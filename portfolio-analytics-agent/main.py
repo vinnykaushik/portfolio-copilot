@@ -1,5 +1,5 @@
 def main():
-    print("Hello from mcp-portfolio-analytics!")
+    print("Hello from portfolio-analytics-agent!")
 
 
 if __name__ == "__main__":
