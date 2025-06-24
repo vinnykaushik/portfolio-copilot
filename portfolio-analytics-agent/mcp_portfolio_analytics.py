@@ -154,7 +154,7 @@ def calculate_position_concentration(
         if inv.type in {"stocks", "crypto"}:
             symbol = inv.symbol or ""
             price = get_price_yahoo(symbol)
-            value = inv.quantity or 0.0 * price
+            value = (inv.quantity or 0.0) * price
             position_values.append({"name": symbol, "value": value})
         elif inv.type == "mutual_funds":
             name = inv.name
