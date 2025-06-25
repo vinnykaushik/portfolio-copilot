@@ -3,8 +3,7 @@ import mcp
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Union
+from typing import List
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 from abc import ABC, abstractmethod
@@ -53,7 +52,7 @@ class CustomerPortfolio(BaseModel):
     customer_id: Annotated[str, Field(description="Unique identifier for the customer")]
     customer_name: Annotated[str, Field(description="Name of the customer")]
     investments: Annotated[
-        List[Investment],
+        List[Investment | StocksCrypto | MutualFunds],
         Field(description="List of the customer's portfolio investments"),
     ]
     last_updated: Annotated[
@@ -123,9 +122,10 @@ def get_stock_beta(symbol):
         return 1.0
 
 
+# @mcp.tool()
 def calculate_expected_return(symbol):
     """
-    Calculate expected return using CAPM formula
+    Calculate expected return of a single stock using CAPM formula
     Args:
         symbol: str - stock ticker symbol
     Returns: dict - containing all CAPM components and expected return
