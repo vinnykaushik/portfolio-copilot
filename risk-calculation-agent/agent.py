@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
 from typing import List, Any
 
 # Initialize at module level (keeping your existing approach)
@@ -24,6 +25,9 @@ client = MultiServerMCPClient(
         },  # type: ignore
     }
 )
+
+checkpointer = InMemorySaver()
+config = {"configurable": {"thread_id": 1}}
 
 
 async def get_tools():
@@ -182,6 +186,7 @@ agent = create_react_agent(
     model=llm,
     prompt=risk_calculation_prompt,
     tools=tools,
+    checkpointer=checkpointer,
 )
 
 
@@ -228,7 +233,7 @@ async def get_agent_response(message: str) -> Any:
     """Get response from the agent."""
     try:
         response = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": message}]}
+            {"messages": [{"role": "user", "content": message}]}, config=config  # type: ignore
         )
         return response
     except Exception as e:
