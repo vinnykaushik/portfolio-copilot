@@ -1,10 +1,12 @@
 from fastmcp import FastMCP
-import mcp
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
 from typing import List, Dict, Any, Union
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 mcp = FastMCP(name="Risk Calculation Agent")
 
@@ -20,7 +22,7 @@ def get_risk_free_rate() -> float:
         risk_free_rate = hist["Close"][-1] / 100
         return risk_free_rate
     except Exception as e:
-        print(f"Error fetching risk-free rate: {e}")
+        logging.error(f"Error fetching risk-free rate: {e}")
         return 0.04
 
 
@@ -43,7 +45,7 @@ def get_market_return(period: str = "1y") -> float:
 
         return market_return
     except Exception as e:
-        print(f"Error calculating market return: {e}")
+        logging.error(f"Error calculating market return: {e}")
         return 0.10
 
 
@@ -64,7 +66,7 @@ def get_stock_beta(symbol: str) -> float:
 
         return beta
     except Exception as e:
-        print(f"Error getting beta for {symbol}: {e}")
+        logging.error(f"Error getting beta for {symbol}: {e}")
         return 1.0
 
 
@@ -110,7 +112,7 @@ def get_current_stock_price(symbol: str) -> Union[float, None]:
         hist = ticker.history(period="1d")
         return hist["Close"][-1]
     except Exception as e:
-        print(f"Error getting current price for {symbol}: {e}")
+        logging.error(f"Error getting current price for {symbol}: {e}")
         return None
 
 
@@ -600,7 +602,7 @@ def get_portfolio_volatility_data(
                         "daily_returns": daily_returns.tolist(),
                     }
                 except Exception as e:
-                    print(f"Error calculating volatility for {symbol}: {e}")
+                    logging.error(f"Error calculating volatility for {symbol}: {e}")
                     volatility_data[symbol] = {
                         "volatility": None,
                         "daily_returns": [],
@@ -738,7 +740,6 @@ def validate_portfolio_structure(portfolio_data: Dict[str, Any]) -> tuple[bool, 
 def calculate_parametric_cvar(
     expected_return: float,
     portfolio_std: float,
-    var_value: float,
     confidence_level: float,
     portfolio_value: float,
 ) -> Dict[str, Any]:
@@ -748,7 +749,6 @@ def calculate_parametric_cvar(
     Args:
         expected_return: Portfolio expected return (annualized)
         portfolio_std: Portfolio standard deviation (annualized)
-        var_value: VaR value (as percentage)
         confidence_level: Confidence level (e.g., 0.95 for 95%)
         portfolio_value: Portfolio value for absolute CVaR calculation
 
@@ -822,11 +822,9 @@ def calculate_portfolio_cvar(
         cvar_result = calculate_parametric_cvar(
             expected_return=expected_return,
             portfolio_std=portfolio_std,
-            var_value=var_percentage,
             confidence_level=confidence_level,
             portfolio_value=analyzed_value,
         )
-
         if "error" in cvar_result:
             return {"error": cvar_result["error"]}
 
