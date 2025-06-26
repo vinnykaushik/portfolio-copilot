@@ -3,6 +3,7 @@ import mcp
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from scipy.stats import norm
 from typing import List, Dict, Any, Union
 
 mcp = FastMCP(name="Risk Calculation Agent")
@@ -67,7 +68,6 @@ def get_stock_beta(symbol: str) -> float:
         return 1.0
 
 
-# @mcp.tool()
 def calculate_expected_return(symbol: str) -> Dict[str, Any]:
     """
     Calculate expected return of a single stock using CAPM formula
@@ -141,7 +141,266 @@ def calculate_investment_value(investment: Dict[str, Any]) -> float:
     return 0
 
 
-@mcp.tool()
+def calculate_weights_from_investments(
+    investments: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Calculate portfolio weights for stocks and crypto investments
+
+    Args:
+        investments: List of investment dictionaries
+
+    Returns:
+        Dictionary containing:
+        - weights: Dict[symbol, weight] - portfolio weights
+        - total_value: Total portfolio value including mutual funds
+        - analyzed_value: Value of stocks/crypto only
+        - symbols: List of symbols analyzed
+        - excluded_investments: List of investments that couldn't be valued
+    """
+    try:
+        # Calculate total portfolio value (including mutual funds)
+        total_value = sum(calculate_investment_value(inv) for inv in investments)
+
+        if total_value == 0:
+            return {
+                "error": "Portfolio has no value",
+                "weights": {},
+                "total_value": 0,
+                "analyzed_value": 0,
+                "symbols": [],
+                "excluded_investments": [],
+            }
+
+        weights = {}
+        analyzed_value = 0
+        symbols = []
+        excluded_investments = []
+
+        # Calculate weights for stocks/crypto only
+        for investment in investments:
+            investment_type = investment.get("type", "").lower()
+            if investment_type in ["stocks", "crypto"]:
+                symbol = investment.get("symbol")
+                if symbol:
+                    investment_value = calculate_investment_value(investment)
+                    if investment_value > 0:
+                        weights[symbol] = investment_value / total_value
+                        analyzed_value += investment_value
+                        symbols.append(symbol)
+                    else:
+                        excluded_investments.append(
+                            {
+                                "symbol": symbol,
+                                "type": investment_type,
+                                "reason": "Could not determine current value",
+                            }
+                        )
+                else:
+                    excluded_investments.append(
+                        {
+                            "symbol": "N/A",
+                            "type": investment_type,
+                            "reason": "Missing symbol",
+                        }
+                    )
+
+        return {
+            "weights": weights,
+            "total_value": total_value,
+            "analyzed_value": analyzed_value,
+            "symbols": symbols,
+            "excluded_investments": excluded_investments,
+        }
+
+    except Exception as e:
+        return {
+            "error": f"Error calculating weights: {str(e)}",
+            "weights": {},
+            "total_value": 0,
+            "analyzed_value": 0,
+            "symbols": [],
+            "excluded_investments": [],
+        }
+
+
+def calculate_portfolio_standard_deviation(
+    weights: Dict[str, float], period: str = "1y"
+) -> Dict[str, Any]:
+    """
+    Calculate portfolio standard deviation using weights and correlation matrix
+
+    Args:
+        weights: Dictionary of symbol -> weight mappings
+        period: Time period for historical data
+
+    Returns:
+        Dictionary containing:
+        - portfolio_std: Portfolio standard deviation (annualized)
+        - individual_volatilities: Dict of symbol -> volatility
+        - correlation_matrix: Correlation matrix as dict
+        - excluded_symbols: List of symbols excluded due to data issues
+        - effective_weights: Adjusted weights after excluding problematic symbols
+        - warnings: List of warning messages
+    """
+    try:
+        if not weights:
+            return {
+                "error": "No weights provided",
+                "portfolio_std": None,
+                "individual_volatilities": {},
+                "correlation_matrix": {},
+                "excluded_symbols": [],
+                "effective_weights": {},
+                "warnings": [],
+            }
+
+        symbols = list(weights.keys())
+        individual_volatilities = {}
+        excluded_symbols = []
+        warnings = []
+
+        # Get individual volatilities
+        for symbol in symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period=period)
+
+                if len(hist) < 30:  # Need at least 30 days for reliable volatility
+                    excluded_symbols.append(symbol)
+                    warnings.append(
+                        f"Insufficient data for {symbol} (only {len(hist)} days)"
+                    )
+                    continue
+
+                daily_returns = hist["Close"].pct_change().dropna()
+                volatility = daily_returns.std() * np.sqrt(252)  # Annualized
+
+                if (
+                    np.isnan(volatility) or volatility <= 0 or volatility > 5
+                ):  # > 500% annual volatility seems unrealistic
+                    excluded_symbols.append(symbol)
+                    warnings.append(f"Invalid volatility for {symbol}: {volatility}")
+                    continue
+
+                individual_volatilities[symbol] = volatility
+
+            except Exception as e:
+                excluded_symbols.append(symbol)
+                warnings.append(f"Error calculating volatility for {symbol}: {str(e)}")
+
+        # Remove excluded symbols and recalculate weights
+        effective_symbols = [s for s in symbols if s not in excluded_symbols]
+
+        if not effective_symbols:
+            return {
+                "error": "No symbols with valid volatility data",
+                "portfolio_std": None,
+                "individual_volatilities": individual_volatilities,
+                "correlation_matrix": {},
+                "excluded_symbols": excluded_symbols,
+                "effective_weights": {},
+                "warnings": warnings,
+            }
+
+        # Recalculate weights for remaining symbols (normalize to sum to analyzed portion)
+        total_effective_weight = sum(weights[s] for s in effective_symbols)
+        effective_weights = {
+            s: weights[s] / total_effective_weight for s in effective_symbols
+        }
+
+        # Handle single asset case
+        if len(effective_symbols) == 1:
+            symbol = effective_symbols[0]
+            portfolio_std = individual_volatilities[symbol]
+            return {
+                "portfolio_std": portfolio_std,
+                "individual_volatilities": individual_volatilities,
+                "correlation_matrix": {symbol: {symbol: 1.0}},
+                "excluded_symbols": excluded_symbols,
+                "effective_weights": effective_weights,
+                "warnings": warnings
+                + ["Single asset portfolio - no correlation effects"],
+            }
+
+        # Get correlation matrix for multiple assets
+        try:
+            raw_data = yf.download(effective_symbols, period=period, progress=False)
+            if raw_data is None or raw_data.empty:
+                return {
+                    "error": "Could not download correlation data",
+                    "portfolio_std": None,
+                    "individual_volatilities": individual_volatilities,
+                    "correlation_matrix": {},
+                    "excluded_symbols": excluded_symbols,
+                    "effective_weights": effective_weights,
+                    "warnings": warnings,
+                }
+
+            # Handle both single and multiple symbol cases
+            if len(effective_symbols) == 1:
+                correlation_matrix = {effective_symbols[0]: {effective_symbols[0]: 1.0}}
+            else:
+                data = raw_data["Close"]
+                if isinstance(data, pd.Series):
+                    correlation_matrix = {
+                        effective_symbols[0]: {effective_symbols[0]: 1.0}
+                    }
+                else:
+                    returns = data.pct_change().dropna()
+                    corr_df = returns.corr()
+                    correlation_matrix = corr_df.to_dict()
+
+            # Calculate portfolio standard deviation using matrix formula
+            # σ_p = √(w^T × Σ × w) where Σ is the covariance matrix
+            portfolio_variance = 0
+
+            for i, symbol_i in enumerate(effective_symbols):
+                for j, symbol_j in enumerate(effective_symbols):
+                    weight_i = effective_weights[symbol_i]
+                    weight_j = effective_weights[symbol_j]
+                    vol_i = individual_volatilities[symbol_i]
+                    vol_j = individual_volatilities[symbol_j]
+                    correlation = correlation_matrix.get(symbol_i, {}).get(symbol_j, 0)
+
+                    portfolio_variance += (
+                        weight_i * weight_j * vol_i * vol_j * correlation
+                    )
+
+            portfolio_std = np.sqrt(portfolio_variance)
+
+            return {
+                "portfolio_std": portfolio_std,
+                "individual_volatilities": individual_volatilities,
+                "correlation_matrix": correlation_matrix,
+                "excluded_symbols": excluded_symbols,
+                "effective_weights": effective_weights,
+                "warnings": warnings,
+            }
+
+        except Exception as e:
+            return {
+                "error": f"Error calculating correlation matrix: {str(e)}",
+                "portfolio_std": None,
+                "individual_volatilities": individual_volatilities,
+                "correlation_matrix": {},
+                "excluded_symbols": excluded_symbols,
+                "effective_weights": effective_weights,
+                "warnings": warnings,
+            }
+
+    except Exception as e:
+        return {
+            "error": f"Error calculating portfolio standard deviation: {str(e)}",
+            "portfolio_std": None,
+            "individual_volatilities": {},
+            "correlation_matrix": {},
+            "excluded_symbols": [],
+            "effective_weights": {},
+            "warnings": [],
+        }
+
+
 def calculate_portfolio_expected_return(
     portfolio_data: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -172,30 +431,17 @@ def calculate_portfolio_expected_return(
     try:
         investments = portfolio_data.get("investments", [])
 
-        # Calculate total portfolio value
-        total_value = sum(calculate_investment_value(inv) for inv in investments)
+        # Use the new weights function
+        weights_result = calculate_weights_from_investments(investments)
 
-        if total_value == 0:
+        if "error" in weights_result:
             return {
-                "error": "Portfolio has no value",
+                "error": weights_result["error"],
                 "portfolio_expected_return": None,
                 "individual_investments": {},
             }
 
-        # Calculate weights for stocks/crypto only
-        weights = {}
-        analyzed_value = 0
-
-        for investment in investments:
-            investment_type = investment.get("type", "").lower()
-            if investment_type in ["stocks", "crypto"]:
-                symbol = investment.get("symbol")
-                if symbol:
-                    investment_value = calculate_investment_value(investment)
-                    if investment_value > 0:
-                        weights[symbol] = investment_value / total_value
-                        analyzed_value += investment_value
-
+        weights = weights_result["weights"]
         if not weights:
             return {
                 "error": "No stocks or crypto found in portfolio for CAPM analysis",
@@ -221,14 +467,102 @@ def calculate_portfolio_expected_return(
             "customer_id": portfolio_data.get("customer_id"),
             "customer_name": portfolio_data.get("customer_name"),
             "portfolio_expected_return": portfolio_expected_return,
-            "total_portfolio_value": total_value,
-            "analyzed_portion_value": analyzed_value,
+            "total_portfolio_value": weights_result["total_value"],
+            "analyzed_portion_value": weights_result["analyzed_value"],
             "individual_investments": investment_analysis,
             "weights": weights,
+            "excluded_investments": weights_result["excluded_investments"],
         }
 
     except Exception as e:
         return {"error": f"Error calculating portfolio expected return: {str(e)}"}
+
+
+def calculate_portfolio_var(
+    portfolio_data: Dict[str, Any],
+    confidence_level: float = 0.95,
+    time_horizon: int = 1,
+    period: str = "1y",
+) -> Dict[str, Any]:
+    """
+    Calculate Value at Risk (VaR) for a portfolio using parametric method
+
+    Args:
+        portfolio_data: Dictionary containing portfolio information
+        confidence_level: Confidence level (e.g., 0.95 for 95%)
+        time_horizon: Time horizon in days (default 1)
+        period: Historical period for volatility calculation (default "1y")
+
+    Returns:
+        Dictionary containing VaR calculation results
+    """
+    try:
+        investments = portfolio_data.get("investments", [])
+
+        # Step 1: Calculate weights
+        weights_result = calculate_weights_from_investments(investments)
+        if "error" in weights_result:
+            return {"error": weights_result["error"]}
+
+        weights = weights_result["weights"]
+        if not weights:
+            return {"error": "No stocks or crypto found for VaR calculation"}
+
+        # Step 2: Calculate expected return
+        expected_return_result = calculate_portfolio_expected_return(portfolio_data)
+        if "error" in expected_return_result:
+            return {"error": expected_return_result["error"]}
+
+        portfolio_expected_return = expected_return_result["portfolio_expected_return"]
+
+        # Step 3: Calculate portfolio standard deviation
+        std_result = calculate_portfolio_standard_deviation(weights, period)
+        if "error" in std_result:
+            return {"error": std_result["error"]}
+
+        portfolio_std = std_result["portfolio_std"]
+        if portfolio_std is None:
+            return {"error": "Could not calculate portfolio standard deviation"}
+
+        # Step 4: Convert confidence level to z-score
+        z_score = norm.ppf(1 - confidence_level)  # Negative value for VaR
+
+        # Step 5: Calculate VaR using parametric formula
+        # VaR = μ + Z × σ, scaled for time horizon
+        daily_var = portfolio_expected_return / 252 + z_score * portfolio_std / np.sqrt(
+            252
+        )
+        var_absolute = (
+            daily_var * np.sqrt(time_horizon) * weights_result["analyzed_value"]
+        )
+        var_percentage = daily_var * np.sqrt(time_horizon)
+
+        return {
+            "customer_id": portfolio_data.get("customer_id"),
+            "customer_name": portfolio_data.get("customer_name"),
+            "var_absolute": abs(var_absolute),  # Absolute dollar amount
+            "var_percentage": abs(var_percentage),  # As percentage of portfolio
+            "confidence_level": confidence_level,
+            "time_horizon_days": time_horizon,
+            "z_score": z_score,
+            "portfolio_expected_return_annual": portfolio_expected_return,
+            "portfolio_std_annual": portfolio_std,
+            "total_portfolio_value": weights_result["total_value"],
+            "analyzed_portion_value": weights_result["analyzed_value"],
+            "coverage_percentage": (
+                weights_result["analyzed_value"] / weights_result["total_value"]
+                if weights_result["total_value"] > 0
+                else 0
+            ),
+            "weights": weights,
+            "excluded_investments": weights_result["excluded_investments"],
+            "volatility_warnings": std_result["warnings"],
+            "excluded_symbols": std_result["excluded_symbols"],
+            "methodology": "Parametric VaR using historical volatility and correlation",
+        }
+
+    except Exception as e:
+        return {"error": f"Error calculating portfolio VaR: {str(e)}"}
 
 
 def get_portfolio_volatility_data(
@@ -306,7 +640,7 @@ def get_portfolio_correlation_matrix(
             return {"error": "Need at least 2 symbols for correlation matrix"}
 
         try:
-            raw_data = yf.download(symbols, period=period)
+            raw_data = yf.download(symbols, period=period, progress=False)
             if raw_data is None or raw_data.empty:
                 return {"error": "No data returned from yfinance"}
 
@@ -401,6 +735,12 @@ def validate_portfolio_structure(portfolio_data: Dict[str, Any]) -> tuple[bool, 
     return True, ""
 
 
+# MCP Tool Definitions
+mcp.tool(calculate_expected_return)
+mcp.tool(calculate_portfolio_expected_return)
+mcp.tool(calculate_portfolio_var)
+
+
 """ if __name__ == "__main__":
     # Example usage
     sample_portfolio = {
@@ -417,4 +757,7 @@ def validate_portfolio_structure(portfolio_data: Dict[str, Any]) -> tuple[bool, 
     # Test the functions
     result = calculate_portfolio_expected_return(sample_portfolio)
     print("Portfolio Expected Return:", result)
+    
+    var_result = calculate_portfolio_var(sample_portfolio)
+    print("Portfolio VaR:", var_result)
  """

@@ -241,7 +241,7 @@ async def main():
             "messages": [
                 {
                     "role": "user",
-                    "content": """what is the expected return of this portfolio?'
+                    "content": """what is the VaR of this portfolio?'
                                   {
                                     "customer_id": "33333",
                                     "customer_name": "Carl Pei",
