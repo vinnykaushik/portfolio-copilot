@@ -735,10 +735,144 @@ def validate_portfolio_structure(portfolio_data: Dict[str, Any]) -> tuple[bool, 
     return True, ""
 
 
+def calculate_parametric_cvar(
+    expected_return: float,
+    portfolio_std: float,
+    var_value: float,
+    confidence_level: float,
+    portfolio_value: float,
+) -> Dict[str, Any]:
+    """
+    Calculate Conditional Value at Risk (CVaR) using parametric method
+
+    Args:
+        expected_return: Portfolio expected return (annualized)
+        portfolio_std: Portfolio standard deviation (annualized)
+        var_value: VaR value (as percentage)
+        confidence_level: Confidence level (e.g., 0.95 for 95%)
+        portfolio_value: Portfolio value for absolute CVaR calculation
+
+    Returns:
+        Dictionary containing CVaR calculation results
+    """
+    try:
+        # Get z-score for the confidence level
+        z_score = norm.ppf(1 - confidence_level)
+
+        # Calculate probability density function at the z-score
+        phi_z = norm.pdf(z_score)
+
+        # Calculate tail probability (1 - confidence_level)
+        tail_prob = 1 - confidence_level
+
+        # Parametric CVaR formula: CVaR = μ + (φ(z) / (1-c)) × σ
+        # This is the expected value of returns below the VaR threshold
+        cvar_percentage = expected_return / 252 + (
+            phi_z / tail_prob
+        ) * portfolio_std / np.sqrt(252)
+        cvar_absolute = abs(cvar_percentage * portfolio_value)
+
+        return {
+            "cvar_absolute": cvar_absolute,
+            "cvar_percentage": abs(cvar_percentage),
+            "z_score": z_score,
+            "phi_z": phi_z,
+            "tail_probability": tail_prob,
+            "methodology": "Parametric CVaR assuming normal distribution",
+        }
+
+    except Exception as e:
+        return {"error": f"Error calculating parametric CVaR: {str(e)}"}
+
+
+def calculate_portfolio_cvar(
+    portfolio_data: Dict[str, Any],
+    confidence_level: float = 0.95,
+    time_horizon: int = 1,
+    period: str = "1y",
+) -> Dict[str, Any]:
+    """
+    Calculate Conditional Value at Risk (CVaR) for a portfolio
+
+    Args:
+        portfolio_data: Dictionary containing portfolio information
+        confidence_level: Confidence level (e.g., 0.95 for 95%)
+        time_horizon: Time horizon in days (default 1)
+        period: Historical period for volatility calculation (default "1y")
+
+    Returns:
+        Dictionary containing CVaR calculation results
+    """
+    try:
+        # Step 1: Calculate VaR first (we'll reuse its components)
+        var_result = calculate_portfolio_var(
+            portfolio_data, confidence_level, time_horizon, period
+        )
+
+        if "error" in var_result:
+            return {"error": var_result["error"]}
+
+        # Step 2: Extract VaR components for CVaR calculation
+        expected_return = var_result["portfolio_expected_return_annual"]
+        portfolio_std = var_result["portfolio_std_annual"]
+        var_percentage = var_result["var_percentage"]
+        analyzed_value = var_result["analyzed_portion_value"]
+
+        # Step 3: Calculate parametric CVaR
+        cvar_result = calculate_parametric_cvar(
+            expected_return=expected_return,
+            portfolio_std=portfolio_std,
+            var_value=var_percentage,
+            confidence_level=confidence_level,
+            portfolio_value=analyzed_value,
+        )
+
+        if "error" in cvar_result:
+            return {"error": cvar_result["error"]}
+
+        # Step 4: Scale for time horizon
+        cvar_absolute_scaled = cvar_result["cvar_absolute"] * np.sqrt(time_horizon)
+        cvar_percentage_scaled = cvar_result["cvar_percentage"] * np.sqrt(time_horizon)
+
+        # Step 5: Combine results
+        return {
+            "customer_id": portfolio_data.get("customer_id"),
+            "customer_name": portfolio_data.get("customer_name"),
+            "cvar_absolute": cvar_absolute_scaled,  # Absolute dollar amount
+            "cvar_percentage": cvar_percentage_scaled,  # As percentage of portfolio
+            "var_absolute": var_result["var_absolute"],  # Include VaR for comparison
+            "var_percentage": var_result["var_percentage"],
+            "cvar_to_var_ratio": (
+                cvar_percentage_scaled / var_result["var_percentage"]
+                if var_result["var_percentage"] != 0
+                else 0
+            ),
+            "confidence_level": confidence_level,
+            "time_horizon_days": time_horizon,
+            "z_score": cvar_result["z_score"],
+            "phi_z": cvar_result["phi_z"],
+            "tail_probability": cvar_result["tail_probability"],
+            "portfolio_expected_return_annual": expected_return,
+            "portfolio_std_annual": portfolio_std,
+            "total_portfolio_value": var_result["total_portfolio_value"],
+            "analyzed_portion_value": analyzed_value,
+            "coverage_percentage": var_result["coverage_percentage"],
+            "weights": var_result["weights"],
+            "excluded_investments": var_result["excluded_investments"],
+            "volatility_warnings": var_result["volatility_warnings"],
+            "excluded_symbols": var_result["excluded_symbols"],
+            "methodology": "Parametric CVaR using normal distribution assumption",
+        }
+
+    except Exception as e:
+        return {"error": f"Error calculating portfolio CVaR: {str(e)}"}
+
+
 # MCP Tool Definitions
 mcp.tool(calculate_expected_return)
 mcp.tool(calculate_portfolio_expected_return)
 mcp.tool(calculate_portfolio_var)
+mcp.tool(calculate_portfolio_cvar)
 
 
 """ if __name__ == "__main__":
