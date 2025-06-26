@@ -11,10 +11,6 @@ TARGET_FOLDER_PATH = os.path.join(
 
 LLM_MODEL = "gemini-2.0-flash"
 
-TARGET_FOLDER_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "mcp_portfolio_analytics.py"
-)
-
 portfolio_toolset = MCPToolset(
     connection_params=StdioServerParameters(
         command="python",
