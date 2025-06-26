@@ -171,7 +171,7 @@ Your capabilities are limited to the tools available to you, which are listed be
 
 # Instructions
 - Use the tools to perform calculations and return results in a structured format.
-- Format the input for tools according to the schema definitions provided. Create a dictionary that matches the expected schema. Always ensure that the input matches the expected schema.
+- Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
 """
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
@@ -215,11 +215,6 @@ async def main():
                                             "type": "stocks",
                                             "symbol": "INTC",
                                             "quantity": 25,
-                                        },
-                                        {
-                                            "type": "bonds",
-                                            "name": "Corporate Bond Index Fund",
-                                            "value": 45000,
                                         },
                                     ],
                                     "last_updated": "2025-06-18",

@@ -10,5 +10,6 @@ dependencies = [
     "langchain-google-genai>=2.1.5",
     "langchain-mcp-adapters>=0.1.7",
     "langgraph>=0.4.9",
+    "streamlit>=1.46.1",
     "yfinance>=0.2.63",
 ]

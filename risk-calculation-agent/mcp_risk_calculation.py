@@ -3,67 +3,12 @@ import mcp
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from typing import List
-from pydantic import BaseModel, Field
-from typing_extensions import Annotated
-from abc import ABC, abstractmethod
+from typing import List, Dict, Any, Union
 
 mcp = FastMCP(name="Risk Calculation Agent")
 
 
-# Your updated models (included for reference)
-class Investment(BaseModel, ABC):
-    """Base class for all investment holdings in a portfolio"""
-
-    @abstractmethod
-    def get_investment_type(self) -> str:
-        """Return the type of investment"""
-        pass
-
-
-class StocksCrypto(Investment):
-    """Investment model for stocks and cryptocurrency"""
-
-    type: Annotated[
-        str, Field(description="Type of investment asset (stocks or crypto)")
-    ]
-    symbol: Annotated[str, Field(description="Ticker symbol for the stock or crypto")]
-    quantity: Annotated[float, Field(ge=0, description="Number of units held")]
-
-    def get_investment_type(self) -> str:
-        return self.type
-
-
-class MutualFunds(Investment):
-    """Investment model for mutual funds"""
-
-    name: Annotated[str, Field(description="Name of the mutual fund")]
-    value: Annotated[
-        float, Field(ge=0, description="Estimated value of mutual fund investment")
-    ]
-
-    def get_investment_type(self) -> str:
-        return "mutual_funds"
-
-
-class CustomerPortfolio(BaseModel):
-    """Customer portfolio containing investments and metadata"""
-
-    customer_id: Annotated[str, Field(description="Unique identifier for the customer")]
-    customer_name: Annotated[str, Field(description="Name of the customer")]
-    investments: Annotated[
-        List[Investment | StocksCrypto | MutualFunds],
-        Field(description="List of the customer's portfolio investments"),
-    ]
-    last_updated: Annotated[
-        str, Field(description="Last update timestamp in ISO 8601 format")
-    ]
-
-
-# CAPM Functions adapted for your new inheritance-based models
-
-
-def get_risk_free_rate():
+def get_risk_free_rate() -> float:
     """
     Get the current 10-year Treasury rate as risk-free rate
     Returns: float - risk-free rate as decimal
@@ -78,7 +23,7 @@ def get_risk_free_rate():
         return 0.04
 
 
-def get_market_return(period="1y"):
+def get_market_return(period: str = "1y") -> float:
     """
     Calculate market return using S&P 500 as proxy
     Args:
@@ -101,7 +46,7 @@ def get_market_return(period="1y"):
         return 0.10
 
 
-def get_stock_beta(symbol):
+def get_stock_beta(symbol: str) -> float:
     """
     Get beta for a specific stock
     Args:
@@ -123,20 +68,22 @@ def get_stock_beta(symbol):
 
 
 # @mcp.tool()
-def calculate_expected_return(symbol):
+def calculate_expected_return(symbol: str) -> Dict[str, Any]:
     """
     Calculate expected return of a single stock using CAPM formula
+
     Args:
-        symbol: str - stock ticker symbol
-    Returns: dict - containing all CAPM components and expected return
+        symbol: Stock ticker symbol (e.g., "AAPL", "MSFT")
+
+    Returns:
+        Dictionary containing CAPM components and expected return
     """
     rf = get_risk_free_rate()
     rm = get_market_return()
     beta = get_stock_beta(symbol)
 
     if beta is None:
-        print(f"Could not determine beta for {symbol}")
-        return None
+        return {"error": f"Could not determine beta for {symbol}"}
 
     equity_risk_premium = rm - rf
     expected_return = rf + (beta * equity_risk_premium)
@@ -151,7 +98,7 @@ def calculate_expected_return(symbol):
     }
 
 
-def get_current_stock_price(symbol):
+def get_current_stock_price(symbol: str) -> Union[float, None]:
     """
     Get current stock price for calculating position values
     Args:
@@ -167,204 +114,307 @@ def get_current_stock_price(symbol):
         return None
 
 
-def calculate_investment_value(investment: Investment):
+def calculate_investment_value(investment: Dict[str, Any]) -> float:
     """
     Calculate the current market value of an investment
     Args:
-        investment: Investment - Base Investment instance (StocksCrypto or MutualFunds)
+        investment: Dictionary with investment details
     Returns: float - current market value
     """
-    investment_type = investment.get_investment_type()
+    investment_type = investment.get("type", "").lower()
 
     if investment_type == "mutual_funds":
-        # MutualFunds has a direct value attribute
-        mutual_fund = investment if isinstance(investment, MutualFunds) else None
-        if mutual_fund is None:
-            return 0
-        return mutual_fund.value
+        return investment.get("value", 0)
 
     elif investment_type in ["stocks", "crypto"]:
-        # StocksCrypto has symbol and quantity attributes
-        stocks_crypto = investment if isinstance(investment, StocksCrypto) else None
-        if stocks_crypto is None:
-            # Type safety fallback - should not happen with proper data
+        symbol = investment.get("symbol")
+        quantity = investment.get("quantity", 0)
+
+        if not symbol:
             return 0
-        current_price = get_current_stock_price(stocks_crypto.symbol)
+
+        current_price = get_current_stock_price(symbol)
         if current_price is None:
             return 0
-        return stocks_crypto.quantity * current_price
+        return quantity * current_price
 
     return 0
 
 
-def calculate_portfolio_weights(portfolio: CustomerPortfolio):
-    """
-    Calculate weights for each investment in the portfolio
-    Args:
-        portfolio: CustomerPortfolio - Pydantic model instance
-    Returns: dict - {symbol: weight} for stocks/crypto, excludes mutual funds
-    """
-    # Calculate total portfolio value
-    total_value = sum(calculate_investment_value(inv) for inv in portfolio.investments)
-
-    if total_value == 0:
-        return {}
-
-    weights = {}
-    for investment in portfolio.investments:
-        investment_type = investment.get_investment_type()
-        if investment_type in ["stocks", "crypto"]:
-            # Type checking - ensure it's a StocksCrypto instance
-            if isinstance(investment, StocksCrypto):
-                investment_value = calculate_investment_value(investment)
-                weights[investment.symbol] = investment_value / total_value
-
-    return weights
-
-
 @mcp.tool()
-def calculate_portfolio_expected_return(portfolio: CustomerPortfolio):
+def calculate_portfolio_expected_return(
+    portfolio_data: Dict[str, Any],
+) -> Dict[str, Any]:
     """
-    Calculate expected return for a CustomerPortfolio using CAPM
+    Calculate expected return for a customer portfolio using CAPM
     Only includes stocks and crypto (excludes mutual funds)
-    Args:
-        portfolio: CustomerPortfolio - Pydantic model instance
-    Returns: dict - portfolio analysis including expected return
-    """
-    # Get portfolio weights
-    weights = calculate_portfolio_weights(portfolio)
 
-    if not weights:
-        return {
-            "error": "No stocks or crypto found in portfolio for CAPM analysis",
-            "portfolio_expected_return": None,
-            "individual_investments": {},
+    Args:
+        portfolio_data: Dictionary containing portfolio information with structure:
+        {
+            "customer_id": "string",
+            "customer_name": "string",
+            "investments": [
+                {
+                    "type": "stocks" | "crypto" | "mutual_funds",
+                    "symbol": "string (for stocks/crypto)",
+                    "quantity": number (for stocks/crypto),
+                    "name": "string (for mutual funds)",
+                    "value": number (for mutual funds)
+                }
+            ],
+            "last_updated": "ISO 8601 timestamp"
         }
 
-    portfolio_expected_return = 0
-    investment_analysis = {}
+    Returns:
+        Dictionary containing portfolio analysis including expected return
+    """
+    try:
+        investments = portfolio_data.get("investments", [])
 
-    for symbol, weight in weights.items():
-        stock_data = calculate_expected_return(symbol)
-        if stock_data:
-            investment_analysis[symbol] = {
-                **stock_data,
-                "weight": weight,
-                "weighted_return": weight * stock_data["expected_return"],
+        # Calculate total portfolio value
+        total_value = sum(calculate_investment_value(inv) for inv in investments)
+
+        if total_value == 0:
+            return {
+                "error": "Portfolio has no value",
+                "portfolio_expected_return": None,
+                "individual_investments": {},
             }
-            portfolio_expected_return += weight * stock_data["expected_return"]
 
-    return {
-        "customer_id": portfolio.customer_id,
-        "customer_name": portfolio.customer_name,
-        "portfolio_expected_return": portfolio_expected_return,
-        "total_portfolio_value": sum(
-            calculate_investment_value(inv) for inv in portfolio.investments
-        ),
-        "analyzed_portion_value": sum(
-            calculate_investment_value(inv)
-            for inv in portfolio.investments
-            if inv.get_investment_type() in ["stocks", "crypto"]
-        ),
-        "individual_investments": investment_analysis,
-        "weights": weights,
-    }
+        # Calculate weights for stocks/crypto only
+        weights = {}
+        analyzed_value = 0
+
+        for investment in investments:
+            investment_type = investment.get("type", "").lower()
+            if investment_type in ["stocks", "crypto"]:
+                symbol = investment.get("symbol")
+                if symbol:
+                    investment_value = calculate_investment_value(investment)
+                    if investment_value > 0:
+                        weights[symbol] = investment_value / total_value
+                        analyzed_value += investment_value
+
+        if not weights:
+            return {
+                "error": "No stocks or crypto found in portfolio for CAPM analysis",
+                "portfolio_expected_return": None,
+                "individual_investments": {},
+            }
+
+        # Calculate portfolio expected return
+        portfolio_expected_return = 0
+        investment_analysis = {}
+
+        for symbol, weight in weights.items():
+            stock_data = calculate_expected_return(symbol)
+            if "error" not in stock_data:
+                investment_analysis[symbol] = {
+                    **stock_data,
+                    "weight": weight,
+                    "weighted_return": weight * stock_data["expected_return"],
+                }
+                portfolio_expected_return += weight * stock_data["expected_return"]
+
+        return {
+            "customer_id": portfolio_data.get("customer_id"),
+            "customer_name": portfolio_data.get("customer_name"),
+            "portfolio_expected_return": portfolio_expected_return,
+            "total_portfolio_value": total_value,
+            "analyzed_portion_value": analyzed_value,
+            "individual_investments": investment_analysis,
+            "weights": weights,
+        }
+
+    except Exception as e:
+        return {"error": f"Error calculating portfolio expected return: {str(e)}"}
 
 
-def get_portfolio_volatility_data(portfolio: CustomerPortfolio, period="1y"):
+def get_portfolio_volatility_data(
+    portfolio_data: Dict[str, Any], period: str = "1y"
+) -> Dict[str, Any]:
     """
     Get volatility data for portfolio VaR calculations
+
     Args:
-        portfolio: CustomerPortfolio - Pydantic model instance
-        period: str - time period for calculation
-    Returns: dict - volatility data for each stock/crypto
+        portfolio_data: Dictionary containing portfolio information (same structure as calculate_portfolio_expected_return)
+        period: Time period for calculation (default "1y")
+
+    Returns:
+        Dictionary with volatility data for each stock/crypto
     """
-    volatility_data = {}
+    try:
+        investments = portfolio_data.get("investments", [])
+        volatility_data = {}
 
-    for investment in portfolio.investments:
-        investment_type = investment.get_investment_type()
-        if investment_type in ["stocks", "crypto"] and isinstance(
-            investment, StocksCrypto
-        ):
-            try:
-                ticker = yf.Ticker(investment.symbol)
-                hist = ticker.history(period=period)
-                daily_returns = hist["Close"].pct_change().dropna()
-                volatility = daily_returns.std() * np.sqrt(252)  # Annualized
+        for investment in investments:
+            investment_type = investment.get("type", "").lower()
+            if investment_type in ["stocks", "crypto"]:
+                symbol = investment.get("symbol")
+                if not symbol:
+                    continue
 
-                volatility_data[investment.symbol] = {
-                    "volatility": volatility,
-                    "daily_returns": daily_returns.tolist(),
-                }
-            except Exception as e:
-                print(f"Error calculating volatility for {investment.symbol}: {e}")
-                volatility_data[investment.symbol] = {
-                    "volatility": None,
-                    "daily_returns": [],
-                }
+                try:
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period=period)
+                    daily_returns = hist["Close"].pct_change().dropna()
+                    volatility = daily_returns.std() * np.sqrt(252)  # Annualized
 
-    return volatility_data
+                    volatility_data[symbol] = {
+                        "volatility": volatility,
+                        "daily_returns": daily_returns.tolist(),
+                    }
+                except Exception as e:
+                    print(f"Error calculating volatility for {symbol}: {e}")
+                    volatility_data[symbol] = {
+                        "volatility": None,
+                        "daily_returns": [],
+                    }
+
+        return volatility_data
+
+    except Exception as e:
+        return {"error": f"Error getting portfolio volatility data: {str(e)}"}
 
 
-def get_portfolio_correlation_matrix(portfolio: CustomerPortfolio, period="1y"):
+def get_portfolio_correlation_matrix(
+    portfolio_data: Dict[str, Any], period: str = "1y"
+) -> Dict[str, Any]:
     """
     Calculate correlation matrix for stocks/crypto in the portfolio
+
     Args:
-        portfolio: CustomerPortfolio - Pydantic model instance
-        period: str - time period for calculation
-    Returns: pandas.DataFrame - correlation matrix
+        portfolio_data: Dictionary containing portfolio information (same structure as calculate_portfolio_expected_return)
+        period: Time period for calculation (default "1y")
+
+    Returns:
+        Dictionary containing correlation matrix data
     """
-    symbols = []
-    for investment in portfolio.investments:
-        investment_type = investment.get_investment_type()
-        if investment_type in ["stocks", "crypto"] and isinstance(
-            investment, StocksCrypto
-        ):
-            symbols.append(investment.symbol)
-
-    if len(symbols) < 2:
-        print("Need at least 2 symbols for correlation matrix")
-        return None
-
     try:
-        raw_data = yf.download(symbols, period=period)
-        if raw_data is None or raw_data.empty:
-            print("No data returned from yfinance")
-            return None
+        investments = portfolio_data.get("investments", [])
+        symbols = []
 
-        data = raw_data["Close"]
+        for investment in investments:
+            investment_type = investment.get("type", "").lower()
+            if investment_type in ["stocks", "crypto"]:
+                symbol = investment.get("symbol")
+                if symbol:
+                    symbols.append(symbol)
 
-        if isinstance(data, pd.Series):
-            print(
-                "Only one symbol returned valid data - cannot calculate correlation matrix"
-            )
-            return None
+        if len(symbols) < 2:
+            return {"error": "Need at least 2 symbols for correlation matrix"}
 
-        returns = data.pct_change().dropna()
-        correlation_matrix = returns.corr()
-        return correlation_matrix
+        try:
+            raw_data = yf.download(symbols, period=period)
+            if raw_data is None or raw_data.empty:
+                return {"error": "No data returned from yfinance"}
+
+            data = raw_data["Close"]
+
+            if isinstance(data, pd.Series):
+                return {
+                    "error": "Only one symbol returned valid data - cannot calculate correlation matrix"
+                }
+
+            returns = data.pct_change().dropna()
+            correlation_matrix = returns.corr()
+
+            # Convert to dictionary for JSON serialization
+            correlation_dict = correlation_matrix.to_dict()
+
+            return {"correlation_matrix": correlation_dict, "symbols": symbols}
+
+        except Exception as e:
+            return {"error": f"Error calculating correlation matrix: {str(e)}"}
+
     except Exception as e:
-        print(f"Error calculating correlation matrix: {e}")
-        return None
+        return {"error": f"Error processing portfolio data: {str(e)}"}
 
 
-def get_stocks_crypto_from_portfolio(
-    portfolio: CustomerPortfolio,
-) -> List[StocksCrypto]:
+def get_current_price(symbol: str) -> Dict[str, Any]:
     """
-    Extract only StocksCrypto investments from a portfolio
+    Get current stock price for a given symbol
+
     Args:
-        portfolio: CustomerPortfolio - Pydantic model instance
-    Returns: List[StocksCrypto] - filtered list of stock/crypto investments
+        symbol: Stock ticker symbol (e.g., "AAPL", "MSFT")
+
+    Returns:
+        Dictionary containing current price information
     """
-    return [inv for inv in portfolio.investments if isinstance(inv, StocksCrypto)]
+    try:
+        price = get_current_stock_price(symbol)
+        if price is None:
+            return {"error": f"Could not fetch price for {symbol}"}
+
+        return {"symbol": symbol, "current_price": price, "currency": "USD"}
+    except Exception as e:
+        return {"error": f"Error getting current price for {symbol}: {str(e)}"}
 
 
-def get_mutual_funds_from_portfolio(portfolio: CustomerPortfolio) -> List[MutualFunds]:
+# Helper function to validate portfolio structure
+def validate_portfolio_structure(portfolio_data: Dict[str, Any]) -> tuple[bool, str]:
     """
-    Extract only MutualFunds investments from a portfolio
+    Validate that portfolio data has the correct structure
+
     Args:
-        portfolio: CustomerPortfolio - Pydantic model instance
-    Returns: List[MutualFunds] - filtered list of mutual fund investments
+        portfolio_data: Portfolio dictionary to validate
+
+    Returns:
+        Tuple of (is_valid: bool, error_message: str)
     """
-    return [inv for inv in portfolio.investments if isinstance(inv, MutualFunds)]
+    if not isinstance(portfolio_data, dict):
+        return False, "Portfolio data must be a dictionary"
+
+    required_fields = ["customer_id", "customer_name", "investments"]
+    for field in required_fields:
+        if field not in portfolio_data:
+            return False, f"Missing required field: {field}"
+
+    investments = portfolio_data.get("investments", [])
+    if not isinstance(investments, list):
+        return False, "Investments must be a list"
+
+    for i, investment in enumerate(investments):
+        if not isinstance(investment, dict):
+            return False, f"Investment {i} must be a dictionary"
+
+        if "type" not in investment:
+            return False, f"Investment {i} missing 'type' field"
+
+        inv_type = investment.get("type", "").lower()
+        if inv_type in ["stocks", "crypto"]:
+            if "symbol" not in investment or "quantity" not in investment:
+                return (
+                    False,
+                    f"Investment {i} of type '{inv_type}' missing 'symbol' or 'quantity'",
+                )
+        elif inv_type == "mutual_funds":
+            if "name" not in investment or "value" not in investment:
+                return (
+                    False,
+                    f"Investment {i} of type 'mutual_funds' missing 'name' or 'value'",
+                )
+        else:
+            return False, f"Investment {i} has invalid type: {inv_type}"
+
+    return True, ""
+
+
+""" if __name__ == "__main__":
+    # Example usage
+    sample_portfolio = {
+        "customer_id": "123",
+        "customer_name": "John Doe",
+        "investments": [
+            {"type": "stocks", "symbol": "AAPL", "quantity": 10},
+            {"type": "stocks", "symbol": "MSFT", "quantity": 5},
+            {"type": "mutual_funds", "name": "Vanguard S&P 500", "value": 50000},
+        ],
+        "last_updated": "2025-06-25T10:00:00Z",
+    }
+
+    # Test the functions
+    result = calculate_portfolio_expected_return(sample_portfolio)
+    print("Portfolio Expected Return:", result)
+ """
