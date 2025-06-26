@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
-from typing import List
+from typing import List, Any
 
+# Initialize at module level (keeping your existing approach)
 load_dotenv()
 google_api_key = os.getenv("GOOGLE_API_KEY")
 if google_api_key is not None:
@@ -155,11 +156,9 @@ def format_mcp_tools(tools_list: List) -> str:
     return "\n".join(markdown_output)
 
 
+# Initialize tools and agent at module level
 tools = asyncio.run(get_tools())
-
 tool_descriptions = format_mcp_tools(tools)
-
-print("Tools loaded:", tool_descriptions)
 
 risk_calculation_prompt = f"""
 # Overview - Risk Calculation Agent
@@ -172,6 +171,8 @@ Your capabilities are limited to the tools available to you, which are listed be
 # Instructions
 - Use the tools to perform calculations and return results in a structured format.
 - Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
+- When presenting results, format them clearly and explain what each metric means.
+- If asked about portfolio analysis, break down the results by investment type and provide insights.
 """
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
@@ -182,6 +183,56 @@ agent = create_react_agent(
     prompt=risk_calculation_prompt,
     tools=tools,
 )
+
+
+def extract_response_content(response: Any) -> str:
+    """Extract the actual response content from the agent response."""
+    try:
+        # Check if response is a dictionary with messages
+        if isinstance(response, dict) and "messages" in response:
+            agent_messages = response["messages"]
+            if agent_messages:
+                last_message = agent_messages[-1]
+                if hasattr(last_message, "content"):
+                    return last_message.content
+                else:
+                    return str(last_message)
+            else:
+                return "No response generated."
+
+        # If response has messages attribute
+        elif hasattr(response, "messages"):
+            agent_messages = response.messages  # type: ignore
+            if agent_messages:
+                last_message = agent_messages[-1]
+                if hasattr(last_message, "content"):
+                    return last_message.content
+                else:
+                    return str(last_message)
+            else:
+                return "No response generated."
+
+        # If response has content attribute directly
+        elif hasattr(response, "content"):
+            return response.content  # type: ignore
+
+        # Fallback to string representation
+        else:
+            return str(response)
+
+    except Exception as e:
+        return f"Error extracting response: {str(e)}"
+
+
+async def get_agent_response(message: str) -> Any:
+    """Get response from the agent."""
+    try:
+        response = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": message}]}
+        )
+        return response
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 async def main():
