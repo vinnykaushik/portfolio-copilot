@@ -30,11 +30,6 @@ checkpointer = InMemorySaver()
 config = {"configurable": {"thread_id": 1}}
 
 
-async def get_tools():
-    """Get tools from the MCP client."""
-    return await client.get_tools()
-
-
 def format_mcp_tools(tools_list: List) -> str:
     """
     Format an MCP tool list into human-readable markdown format.
@@ -160,34 +155,45 @@ def format_mcp_tools(tools_list: List) -> str:
     return "\n".join(markdown_output)
 
 
+def get_mcp_tools() -> List:
+    """
+    Retrieve the list of tools from the MCP client.
+    """
+    return asyncio.run(client.get_tools())
+
+
 # Initialize tools and agent at module level
-tools = asyncio.run(get_tools())
-tool_descriptions = format_mcp_tools(tools)
+def initialize_agent():
+    tools = get_mcp_tools()
+    tool_descriptions = format_mcp_tools(tools)
 
-risk_calculation_prompt = f"""
-# Overview - Risk Calculation Agent
-You are a helpful risk calculation agent. Your job is to analyze financial portfolios and calculate various risk metrics based on the provided data.
-Your capabilities are limited to the tools available to you, which are listed below:
+    risk_calculation_prompt = f"""
+    # Overview - Risk Calculation Agent
+    You are a helpful risk calculation agent. Your job is to analyze financial portfolios and calculate various risk metrics based on the provided data.
+    Your capabilities are limited to the tools available to you, which are listed below:
 
-# Tools
-{tool_descriptions}
+    # Tools
+    {tool_descriptions}
 
-# Instructions
-- Use the tools to perform calculations and return results in a structured format.
-- Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
-- When presenting results, format them clearly and explain what each metric means.
-- If asked about portfolio analysis, break down the results by investment type and provide insights.
-"""
+    # Instructions
+    - Use the tools to perform calculations and return results in a structured format.
+    - Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
+    - When presenting results, format them clearly and explain what each metric means.
+    - If asked about portfolio analysis, break down the results by investment type and provide insights.
+    """
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
 
-agent = create_react_agent(
-    name="Risk Calculation Agent",
-    model=llm,
-    prompt=risk_calculation_prompt,
-    tools=tools,
-    checkpointer=checkpointer,
-)
+    return create_react_agent(
+        name="Risk Calculation Agent",
+        model=llm,
+        prompt=risk_calculation_prompt,
+        tools=tools,
+        checkpointer=checkpointer,
+    )
+
+
+agent = initialize_agent()
 
 
 def extract_response_content(response: Any) -> str:
@@ -283,5 +289,6 @@ async def main():
     print(response)
 
 
-if __name__ == "__main__":
+""" if __name__ == "__main__":
     asyncio.run(main())
+ """
