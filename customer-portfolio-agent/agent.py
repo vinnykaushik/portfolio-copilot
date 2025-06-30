@@ -1,6 +1,11 @@
+import os
+from json import load
+from dotenv import load_dotenv
 from google.adk.agents import Agent
 from pydantic import BaseModel
 
+load_dotenv()
+os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")
 LLM_MODEL = "gemini-2.5-flash"
 
 
@@ -200,7 +205,7 @@ def get_all_portfolios_tool() -> list[CustomerPortfolio]:
     return [CustomerPortfolio(**portfolio) for portfolio in dummy_data]
 
 
-def get_customer_portfolio_tool(customer_id: str) -> CustomerPortfolio | None:
+def get_portfolio_by_id_tool(customer_id: str) -> CustomerPortfolio | None:
     """
     Fetches comprehensive portfolio data for a **specific** customer.
     Retrieves detailed portfolio information, including individual stock holdings with quantities,
@@ -249,15 +254,71 @@ def get_customer_portfolio_tool(customer_id: str) -> CustomerPortfolio | None:
     return None
 
 
+def get_portfolio_by_name_tool(
+    customer_name: str,
+) -> CustomerPortfolio | list[CustomerPortfolio] | None:
+    """
+    Fetches comprehensive portfolio data for a **specific** customer by name. If there are multiple customers with the same name,
+    it returns a list of portfolios for those customers.
+    Retrieves detailed portfolio information, including individual stock holdings with quantities,
+    mutual fund investments with current values, bond positions, and cryptocurrency holdings where applicable.
+
+    Args:
+        customer_name (str): Full name of the portfolio holder.
+
+    Returns:
+        list[CustomerPortfolio]: A list of models containing the customer's portfolio data, structured as follows:
+            - customer_id (str): Unique identifier for the customer account
+            - customer_name (str): Full name of the portfolio holder
+            - portfolio_value (int): Total portfolio value in USD
+            - investments (list[dict]): Detailed breakdown of all investment positions:
+                * For stocks: type="stocks", symbol (str), quantity (int)
+                * For cryptocurrency: type="crypto", symbol (str), quantity (float)
+                * For mutual funds: type="mutual_funds", name (str), value (int)
+                * For bonds: type="bonds", name (str), value (int)
+            - last_updated (str): ISO date string of the last portfolio update
+
+    **Important**:
+        If the customer name does not match any existing portfolio, will return NONE.
+
+    Note:
+        Currently returns mock data for demonstration purposes. In production, this would
+        connect to actual financial data sources and customer management systems.
+
+    Example:
+        The returned data structure follows this format:
+        {
+            "customer_id": "12345",
+            "customer_name": "John Doe",
+            "portfolio_value": 150000,
+            "investments": [
+                {"type": "stocks", "symbol": "AAPL", "quantity": 10},
+                {"type": "mutual_funds", "name": "S&P 500 Fund", "value": 75000}
+            ],
+            "last_updated": "2025-06-23"
+        }
+    """
+    matching_portfolios = [
+        CustomerPortfolio(**portfolio)
+        for portfolio in dummy_data
+        if portfolio["customer_name"].lower() == customer_name.lower()
+    ]
+    if len(matching_portfolios) == 1:
+        return matching_portfolios[0]
+    return matching_portfolios
+
+
 # AGENT ------------------------------------------------------------------------------------------------------------------------------------
 customer_portfolio_prompt = f""""
-  A specialized financial agent that retrieves and manages customer portfolio data from various investment accounts. 
+  You are a specialized financial agent that retrieves and manages customer portfolio data from various investment accounts.
+  Use the tools at your disposal to fetch portfolio information based on customer ID or name. 
   This agent provides comprehensive portfolio information including individual stock holdings, mutual fund investments, bond positions, and cryptocurrency assets.
 
   # Tools
-  - `get_customer_portfolio_tool`: Fetches customer portfolio data for a specific customer by their unique ID. 
+  - `get_portfolio_by_id_tool`: Fetches customer portfolio data for a specific customer by their unique ID. 
                                    If the customer ID does not match any existing portfolio, it returns None.
                                    Output is structured as a CustomerPortfolio model.
+  - `get_portfolio_by_name_tool`: Fetches portfolio data for a specific customer by their name. Returns a list of CustomerPortfolio models if multiple customers share the same name. You should display these to the user, then ask which one they want to proceed with.
   - `get_all_portfolios_tool`: Fetches comprehensive portfolio data for all customers. Output is structured as a list of CustomerPortfolio models.
 
   # Output Format
@@ -326,6 +387,10 @@ root_agent = Agent(
         "last_updated": "2025-05-01"
     }},""",
     instruction=customer_portfolio_prompt,
-    tools=[get_customer_portfolio_tool, get_all_portfolios_tool],
+    tools=[
+        get_portfolio_by_id_tool,
+        get_all_portfolios_tool,
+        get_portfolio_by_name_tool,
+    ],
     model=LLM_MODEL,
 )
