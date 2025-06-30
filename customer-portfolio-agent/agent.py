@@ -1,7 +1,7 @@
 from google.adk.agents import Agent
 from pydantic import BaseModel
 
-LLM_MODEL = "gemini-2.0-flash"
+LLM_MODEL = "gemini-2.5-flash"
 
 
 class CustomerPortfolio(BaseModel):

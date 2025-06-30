@@ -9,7 +9,7 @@ TARGET_FOLDER_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "mcp_portfolio_analytics.py"
 )
 
-LLM_MODEL = "gemini-2.0-flash"
+LLM_MODEL = "gemini-2.5-flash"
 
 portfolio_toolset = MCPToolset(
     connection_params=StdioServerParameters(
@@ -36,6 +36,11 @@ async def get_tool_descriptions():
     except Exception as e:
         print(f"Error connecting to MCP server: {e}")
         return []
+
+
+def get_mcp_tools():
+    """Get MCP tools from the portfolio analytics toolset."""
+    return asyncio.run(portfolio_toolset.get_tools())
 
 
 def format_tool_descriptions(tools):

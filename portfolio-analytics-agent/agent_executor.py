@@ -1,162 +1,119 @@
-from collections.abc import AsyncGenerator
-import logging
-
-from google.adk import Runner
-from google.adk.events import Event
-from google.genai import types
-
 from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events.event_queue import EventQueue
+from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import (
-    AgentCard,
-    FilePart,
-    FileWithBytes,
-    FileWithUri,
     Part,
     TaskState,
     TextPart,
-    UnsupportedOperationError,
 )
-from a2a.utils.errors import ServerError
+from a2a.utils import new_agent_text_message, new_task
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+import logging
 
-
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
 class ADKAgentExecutor(AgentExecutor):
-    """An AgentExecutor that runs an ADK agent."""
-
-    def __init__(self, runner: Runner, card: AgentCard):
-        self.runner = runner
-        self._card = card
-        self._running_sessions = {}
-
-    def _run_agent(
-        self, session_id, new_message: types.Content
-    ) -> AsyncGenerator[Event, None]:
-        return self.runner.run_async(
-            session_id=session_id, user_id="self", new_message=new_message
-        )
-
-    async def _process_request(
+    def __init__(
         self,
-        new_message: types.Content,
-        session_id: str,
-        task_updater: TaskUpdater,
-    ) -> None:
-        session = await self._upsert_session(
-            session_id,
+        agent,
+        status_message="Processing request...",
+        artifact_name="response",
+    ):
+        """Initialize a generic ADK agent executor.
+
+        Args:
+            agent: The ADK agent instance
+            status_message: Message to display while processing
+            artifact_name: Name for the response artifact
+        """
+        self.agent = agent
+        self.status_message = status_message
+        self.artifact_name = artifact_name
+        self.runner = Runner(
+            app_name=agent.name,
+            agent=agent,
+            artifact_service=InMemoryArtifactService(),
+            session_service=InMemorySessionService(),
+            memory_service=InMemoryMemoryService(),
         )
-        session_id = session.id
-        # Run through all events within the request.
-        async for event in self._run_agent(session_id, new_message):
-            if event.is_final_response():
-                parts = convert_genai_parts_to_a2a(event.content.parts)
-                logger.debug("✅ Yielding final response: %s", parts)
-                await task_updater.add_artifact(parts)
-                await task_updater.complete()
-                break
-            # If the agent is not making a function call, yield an update.
-            if not event.get_function_calls():
-                logger.debug("⏳ Yielding update response")
-                await task_updater.update_status(
-                    TaskState.working,
-                    message=task_updater.new_agent_message(
-                        convert_genai_parts_to_a2a(event.content.parts),
-                    ),
-                )
-            else:
-                logger.debug("➡️ Skipping event")
+
+    async def cancel(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+    ) -> None:
+        """Cancel the execution of a specific task."""
+        raise NotImplementedError(
+            "Cancellation is not implemented for ADKAgentExecutor."
+        )
 
     async def execute(
         self,
         context: RequestContext,
         event_queue: EventQueue,
-    ):
-        # Run the agent until either complete or the task is suspended.
-        updater = TaskUpdater(event_queue, context.task_id, context.context_id)
-        # Immediately notify that the task is submitted.
-        if not context.current_task:
-            await updater.submit()
-        await updater.start_work()
-        await self._process_request(
-            types.UserContent(
-                parts=convert_a2a_parts_to_genai(context.message.parts),
-            ),
-            context.context_id,
-            updater,
-        )
-        logger.debug("--- 💵💱💶 [Currency] execute exiting ---")
+    ) -> None:
+        query = context.get_user_input()
+        task = context.current_task or new_task(context.message)  # type: ignore
+        await event_queue.enqueue_event(task)
 
-    async def cancel(self, context: RequestContext, event_queue: EventQueue):
-        """Cancel the task."""
-        # Ideally: kill any ongoing tasks.
-        raise ServerError(error=UnsupportedOperationError())
+        updater = TaskUpdater(event_queue, task.id, task.contextId)
+        if context.call_context:
+            user_id = context.call_context.user.user_name
+        else:
+            user_id = "a2a_user"
 
-    async def _upsert_session(self, session_id: str):
-        """Upsert a session."""
-        return await self.runner.session_service.get_session(
-            app_name=self.runner.app_name, user_id="self", session_id=session_id
-        ) or await self.runner.session_service.create_session(
-            app_name=self.runner.app_name, user_id="self", session_id=session_id
-        )
-
-
-def convert_a2a_parts_to_genai(parts: list[Part]) -> list[types.Part]:
-    """Convert a list of A2A Part types into a list of Google Gen AI Part types."""
-    return [convert_a2a_part_to_genai(part) for part in parts]
-
-
-def convert_a2a_part_to_genai(part: Part) -> types.Part:
-    """Convert a single A2A Part type into a Google Gen AI Part type."""
-    part = part.root
-    if isinstance(part, TextPart):
-        return types.Part(text=part.text)
-    if isinstance(part, FilePart):
-        if isinstance(part.file, FileWithUri):
-            return types.Part(
-                file_data=types.FileData(
-                    file_uri=part.file.uri, mime_type=part.file.mime_type
-                )
+        try:
+            # Update status with custom message
+            await updater.update_status(
+                TaskState.working,
+                new_agent_text_message(self.status_message, task.contextId, task.id),
             )
-        if isinstance(part.file, FileWithBytes):
-            return types.Part(
-                inline_data=types.Blob(
-                    data=part.file.bytes, mime_type=part.file.mime_type
-                )
+
+            # Process with ADK agent
+            session = await self.runner.session_service.create_session(
+                app_name=self.agent.name,
+                user_id=user_id,
+                state={},
+                session_id=task.contextId,
             )
-        raise ValueError(f"Unsupported file type: {type(part.file)}")
-    raise ValueError(f"Unsupported part type: {type(part)}")
 
-
-def convert_genai_parts_to_a2a(parts: list[types.Part]) -> list[Part]:
-    """Convert a list of Google Gen AI Part types into a list of A2A Part types."""
-    return [
-        convert_genai_part_to_a2a(part)
-        for part in parts
-        if (part.text or part.file_data or part.inline_data)
-    ]
-
-
-def convert_genai_part_to_a2a(part: types.Part) -> Part:
-    """Convert a single Google Gen AI Part type into an A2A Part type."""
-    if part.text:
-        return TextPart(text=part.text)
-    if part.file_data:
-        return FilePart(
-            file=FileWithUri(
-                uri=part.file_data.file_uri,
-                mime_type=part.file_data.mime_type,
+            content = types.Content(
+                role="user", parts=[types.Part.from_text(text=query)]
             )
-        )
-    if part.inline_data:
-        return Part(
-            root=FilePart(
-                file=FileWithBytes(
-                    bytes=part.inline_data.data,
-                    mime_type=part.inline_data.mime_type,
-                )
+
+            response_text = ""
+            async for event in self.runner.run_async(
+                user_id=user_id, session_id=session.id, new_message=content
+            ):
+                if event.is_final_response() and event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            response_text += part.text + "\n"
+                        elif hasattr(part, "function_call"):
+                            logger.info(
+                                f"Function call detected: {part.function_call} with args {part.function_call.args if part.function_call else None}"
+                            )
+                            pass  # Function calls are handled internally by ADK
+
+            # Add response as artifact with custom name
+            await updater.add_artifact(
+                [Part(root=TextPart(text=response_text))],
+                name=self.artifact_name,
             )
-        )
-    raise ValueError(f"Unsupported part type: {part}")
+
+            await updater.complete()
+
+        except Exception as e:
+            await updater.update_status(
+                TaskState.failed,
+                new_agent_text_message(f"Error: {e!s}", task.contextId, task.id),
+                final=True,
+            )
