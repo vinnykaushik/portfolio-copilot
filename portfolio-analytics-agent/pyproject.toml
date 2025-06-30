@@ -5,8 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "a2a-sdk>=0.2.9",
     "fastmcp>=2.9.0",
-    "google-adk>=1.4.2",
+    "google-adk==1.5.0",
     "nest-asyncio>=1.6.0",
     "yfinance>=0.2.63",
 ]

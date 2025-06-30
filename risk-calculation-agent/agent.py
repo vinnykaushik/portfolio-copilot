@@ -1,11 +1,20 @@
+from abc import get_cache_token
 import os
 import asyncio
 from dotenv import load_dotenv
+from httpx import get
+from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
-from typing import List, Any
+from typing import AsyncIterable, List, Any, Literal
+import logging
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize at module level (keeping your existing approach)
 load_dotenv()
@@ -16,6 +25,9 @@ if google_api_key is not None:
 MPC_SERVER_LOCATION = os.path.join(
     os.path.abspath(os.path.dirname(__file__)), "mcp_risk_calculation.py"
 )
+
+# Pre-initialize the MCP client and tools at module level
+logger.info("Initializing MCP client...")
 client = MultiServerMCPClient(
     {
         "risk-calculation-agent": {
@@ -29,22 +41,11 @@ client = MultiServerMCPClient(
 checkpointer = InMemorySaver()
 config = {"configurable": {"thread_id": 1}}
 
-
-async def get_tools():
-    """Get tools from the MCP client."""
-    return await client.get_tools()
+logger.info("Initializing tools and agent...")
+tools = asyncio.run(client.get_tools())  # Get tools once at startup
 
 
 def format_mcp_tools(tools_list: List) -> str:
-    """
-    Format an MCP tool list into human-readable markdown format.
-
-    Args:
-        tools_list: List of StructuredTool objects
-
-    Returns:
-        str: Formatted markdown string
-    """
     if not tools_list:
         return "No tools available.\n"
 
@@ -160,8 +161,14 @@ def format_mcp_tools(tools_list: List) -> str:
     return "\n".join(markdown_output)
 
 
-# Initialize tools and agent at module level
-tools = asyncio.run(get_tools())
+def get_mcp_tools() -> List:
+    """
+    Retrieve the list of tools from the MCP client.
+    """
+    return tools  # Return pre-initialized tools
+
+
+# Initialize agent at module level
 tool_descriptions = format_mcp_tools(tools)
 
 risk_calculation_prompt = f"""
@@ -175,19 +182,172 @@ Your capabilities are limited to the tools available to you, which are listed be
 # Instructions
 - Use the tools to perform calculations and return results in a structured format.
 - Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
+- If needed, reformat the input data to match the tool's schema.
 - When presenting results, format them clearly and explain what each metric means.
 - If asked about portfolio analysis, break down the results by investment type and provide insights.
 """
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
 
-agent = create_react_agent(
-    name="Risk Calculation Agent",
-    model=llm,
-    prompt=risk_calculation_prompt,
-    tools=tools,
-    checkpointer=checkpointer,
-)
+
+class ResponseFormat(BaseModel):
+    """Respond to the user in this format."""
+
+    status: Literal["input_required", "completed", "error"] = "input_required"
+    message: str
+
+
+class RiskCalculationAgent:
+    """Risk Calculation Agent Example."""
+
+    FORMAT_INSTRUCTION = (
+        "Set response status to input_required if the user needs to provide more information to complete the request."
+        "Set response status to error if there is an error while processing the request."
+        "Set response status to completed if the request is complete."
+    )
+
+    def __init__(self):
+        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+        self.tools = tools  # Use pre-initialized tools
+        logger.info(f"Creating Risk Calculation Agent graph with tools {self.tools}")
+
+        self.graph = create_react_agent(
+            self.model,
+            tools=self.tools,
+            checkpointer=checkpointer,
+            prompt=risk_calculation_prompt,
+            response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
+        )
+        logger.info("Risk Calculation Agent initialized!")
+
+    async def stream(self, query, context_id) -> AsyncIterable[dict[str, Any]]:
+        logger.info(f"Streaming query: {query}")
+        inputs = {"messages": [("user", query)]}
+        config = {"configurable": {"thread_id": context_id}}
+
+        try:
+            # Add detailed logging for each step
+            step_count = 0
+            async for item in self.graph.astream(inputs, config, stream_mode="values"):  # type: ignore
+                step_count += 1
+                logger.info(f"Stream step {step_count}: {type(item)}")
+
+                message = item["messages"][-1]
+                logger.info(
+                    f"Message type: {type(message)}, content preview: {str(message)[:200]}"
+                )
+
+                if (
+                    isinstance(message, AIMessage)
+                    and message.tool_calls
+                    and len(message.tool_calls) > 0
+                ):
+                    logger.info(
+                        f"Tool calls: {[tc.get('name', 'unknown') for tc in message.tool_calls]}"
+                    )
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "content": "Processing query with tools...",
+                    }
+                elif isinstance(message, ToolMessage):
+                    logger.info(
+                        f"Tool message content: {message.content[:200] if message.content else 'None'}"
+                    )
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "content": "Processing tool call...",
+                    }
+
+            # Get final response with enhanced error handling
+            final_response = self.get_agent_response(config)
+            logger.info(f"Final response: {final_response}")
+            yield final_response
+
+        except Exception as e:
+            logger.error(f"Error in stream method: {str(e)}", exc_info=True)
+            yield {
+                "is_task_complete": False,
+                "require_user_input": True,
+                "content": f"Error processing request: {str(e)}",
+            }
+
+    def get_agent_response(self, config):
+        logger.info(f"Getting agent response for config: {config}")
+        try:
+            current_state = self.graph.get_state(config)
+            logger.info(
+                f"Current state keys: {list(current_state.values.keys()) if current_state.values else 'None'}"
+            )
+
+            structured_response = current_state.values.get("structured_response")
+            logger.info(f"Structured response: {structured_response}")
+
+            # Check if we have messages in the state
+            messages = current_state.values.get("messages", [])
+            if messages:
+                last_message = messages[-1]
+                logger.info(f"Last message type: {type(last_message)}")
+                logger.info(
+                    f"Last message content: {getattr(last_message, 'content', 'No content')}"
+                )
+
+            if structured_response and isinstance(structured_response, ResponseFormat):
+                if structured_response.status == "input_required":
+                    return {
+                        "is_task_complete": False,
+                        "require_user_input": True,
+                        "content": structured_response.message,
+                    }
+                if structured_response.status == "error":
+                    return {
+                        "is_task_complete": False,
+                        "require_user_input": True,
+                        "content": structured_response.message,
+                    }
+                if structured_response.status == "completed":
+                    return {
+                        "is_task_complete": True,
+                        "require_user_input": False,
+                        "content": structured_response.message,
+                    }
+
+            # Fallback: try to extract content from the last message
+            if messages and hasattr(messages[-1], "content"):
+                content = messages[-1].content
+                if content and not content.startswith("I am sorry"):
+                    return {
+                        "is_task_complete": True,
+                        "require_user_input": False,
+                        "content": content,
+                    }
+
+            logger.warning("No valid structured response found, returning fallback")
+            return {
+                "is_task_complete": False,
+                "require_user_input": True,
+                "content": (
+                    "We are unable to process your request at the moment. "
+                    "Please try again."
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Error in get_agent_response: {str(e)}", exc_info=True)
+            return {
+                "is_task_complete": False,
+                "require_user_input": True,
+                "content": f"Error getting agent response: {str(e)}",
+            }
+
+
+agent_instance = RiskCalculationAgent()
+
+
+def initialize_agent():
+    """Return the pre-initialized agent and config."""
+    return agent_instance, config
 
 
 def extract_response_content(response: Any) -> str:
@@ -229,59 +389,12 @@ def extract_response_content(response: Any) -> str:
         return f"Error extracting response: {str(e)}"
 
 
-async def get_agent_response(message: str) -> Any:
+async def get_response(message: str) -> Any:
     """Get response from the agent."""
     try:
-        response = await agent.ainvoke(
+        response = await agent_instance.graph.ainvoke(
             {"messages": [{"role": "user", "content": message}]}, config=config  # type: ignore
         )
         return response
     except Exception as e:
         return f"Error: {str(e)}"
-
-
-async def main():
-    response = await agent.ainvoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": """what is the conditional VaR of this portfolio?'
-                                  {
-                                    "customer_id": "33333",
-                                    "customer_name": "Carl Pei",
-                                    "portfolio_value": 320000,
-                                    "investments": [
-                                        {
-                                            "type": "stocks",
-                                            "symbol": "NVDA",
-                                            "quantity": 40,
-                                        },
-                                        {
-                                            "type": "stocks",
-                                            "symbol": "AMD",
-                                            "quantity": 18,
-                                        },
-                                        {
-                                            "type": "mutual_funds",
-                                            "name": "Technology Select Sector SPDR Fund",
-                                            "value": 90000,
-                                        },
-                                        {
-                                            "type": "stocks",
-                                            "symbol": "INTC",
-                                            "quantity": 25,
-                                        },
-                                    ],
-                                    "last_updated": "2025-06-18",
-                                }""",
-                }
-            ]
-        }
-    )
-
-    print(response)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

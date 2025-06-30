@@ -9,7 +9,7 @@ TARGET_FOLDER_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "mcp_portfolio_analytics.py"
 )
 
-LLM_MODEL = "gemini-2.0-flash"
+LLM_MODEL = "gemini-2.5-flash"
 
 portfolio_toolset = MCPToolset(
     connection_params=StdioServerParameters(
@@ -36,6 +36,11 @@ async def get_tool_descriptions():
     except Exception as e:
         print(f"Error connecting to MCP server: {e}")
         return []
+
+
+def get_mcp_tools():
+    """Get MCP tools from the portfolio analytics toolset."""
+    return asyncio.run(portfolio_toolset.get_tools())
 
 
 def format_tool_descriptions(tools):
@@ -91,7 +96,7 @@ def get_toolset_description():
 **Description:** Analyzes portfolio exposures across sector, geography, and market cap dimensions using live Yahoo Finance data. Returns percentage allocations and dollar values for each category.
 
 **Parameters:**
-- `portfolio` (CustomerPortfolio) (required): Customer portfolio containing ID, name, and list of investments
+- `portfolio` (CustomerPortfolio) (required): Customer portfolio containing ID, name, and list o8435f investments
 - `min_threshold` (float) (optional): Minimum weight threshold to include in results (0.01 = 1%)
 """
     except RuntimeError:
@@ -104,57 +109,54 @@ def get_toolset_description():
             return "Failed to load tool descriptions from MCP server."
 
 
-# Get the toolset description
-toolset_description = get_toolset_description()
+def initialize_agent():
+    # Get the toolset description
+    toolset_description = get_toolset_description()
 
-portfolio_analytics_prompt = f"""
-# Overview
-You are a helpful portfolio analytics agent that provides insights into customer portfolios.
-Your capabilities include calculating position concentration, analyzing portfolio exposure, and comparing multiple portfolios on these metrics.
+    portfolio_analytics_prompt = f"""
+    # Overview
+    You are a helpful portfolio analytics agent that provides insights into customer portfolios.
+    Your capabilities include calculating position concentration, analyzing portfolio exposure, and comparing multiple portfolios on these metrics.
 
-# Available Tools
-{toolset_description}
+    # Available Tools
+    {toolset_description}
 
-# Usage Guidelines
-When analyzing portfolios:
+    # Usage Guidelines
+    When analyzing portfolios:
 
-1. **Position Concentration Analysis**: Use `calculate_position_concentration` to understand how concentrated a portfolio is across its holdings. The HHI (Herfindahl-Hirschman Index) ranges from 0 (perfectly diversified) to 1 (completely concentrated).
+    1. **Position Concentration Analysis**: Use `calculate_position_concentration` to understand how concentrated a portfolio is across its holdings. The HHI (Herfindahl-Hirschman Index) ranges from 0 (perfectly diversified) to 1 (completely concentrated).
 
-2. **Exposure Analysis**: Use `analyze_portfolio_exposures` to break down portfolio allocations by:
-   - **Sector**: Industry classifications (Technology, Healthcare, etc.)
-   - **Geography**: Country-based exposure (US, International, etc.)  
-   - **Market Cap**: Small Cap (<$2B), Mid Cap ($2B-$10B), Large Cap (>$10B)
+    2. **Exposure Analysis**: Use `analyze_portfolio_exposures` to break down portfolio allocations by:
+    - **Sector**: Industry classifications (Technology, Healthcare, etc.)
+    - **Geography**: Country-based exposure (US, International, etc.)  
+    - **Market Cap**: Small Cap (<$2B), Mid Cap ($2B-$10B), Large Cap (>$10B)
 
-3. **Data Requirements**: Portfolio data should include:
-   - Customer identification (ID and name)
-   - Investment details with proper types ("stocks", "crypto", "mutual_funds")
-   - For stocks/crypto: symbol and quantity
-   - For mutual funds: name and current value
-   - Last updated timestamp
+    3. **Data Requirements**: Portfolio data should include:
+    - Customer identification (ID and name)
+    - Investment details with proper types ("stocks", "crypto", "mutual_funds")
+    - For stocks/crypto: symbol and quantity
+    - For mutual funds: name and current value
+    - Last updated timestamp
 
-4. **Error Handling**: If tools encounter errors (e.g., invalid symbols, network issues), explain the issues clearly and suggest alternatives or data corrections.
+    4. **Error Handling**: If tools encounter errors (e.g., invalid symbols, network issues), explain the issues clearly and suggest alternatives or data corrections.
 
-5. **Interpretation**: Always provide context for the metrics you calculate:
-   - Explain what concentration levels mean for risk
-   - Highlight notable exposures or concentrations
-   - Suggest diversification improvements when appropriate
+    5. **Interpretation**: Always provide context for the metrics you calculate:
+    - Explain what concentration levels mean for risk
+    - Highlight notable exposures or concentrations
+    - Suggest diversification improvements when appropriate
 
-Remember to validate portfolio data structure before calling tools and provide meaningful insights rather than just raw numbers.
-"""
+    # Instructions
+    - Remember to validate portfolio data structure before calling tools and provide meaningful insights rather than just raw numbers.
+    - If needed, reformat the provided portfolio data to match the expected schema.
+    """
 
-root_agent = Agent(
-    name="portfolio_analytics_agent",
-    description="Agent for portfolio analytics with comprehensive toolset integration",
-    model=LLM_MODEL,
-    instruction=portfolio_analytics_prompt,
-    tools=[portfolio_toolset],
-)
+    return Agent(
+        name="portfolio_analytics_agent",
+        description="Agent for portfolio analytics with comprehensive toolset integration",
+        model=LLM_MODEL,
+        instruction=portfolio_analytics_prompt,
+        tools=[portfolio_toolset],
+    )
 
-# Optional: Print the generated tool descriptions for debugging
-if __name__ == "__main__":
-    print("Generated Tool Descriptions:")
-    print("=" * 50)
-    print(toolset_description)
-    print("\n" + "=" * 50)
-    print("Full Agent Prompt:")
-    print(portfolio_analytics_prompt)
+
+root_agent = initialize_agent()

@@ -1,6 +1,6 @@
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from typing import Dict, List, Literal, Annotated
+from typing import Dict, List, Literal, Annotated, Optional
 import yfinance as yf
 
 
@@ -51,14 +51,16 @@ class Investment(BaseModel):
 class CustomerPortfolio(BaseModel):
     """Customer portfolio containing investments and metadata"""
 
-    customer_id: Annotated[str, Field(description="Unique identifier for the customer")]
-    customer_name: Annotated[str, Field(description="Name of the customer")]
+    customer_id: Optional[
+        Annotated[str, Field(description="Unique identifier for the customer")]
+    ]
+    customer_name: Optional[Annotated[str, Field(description="Name of the customer")]]
     investments: Annotated[
         List[Investment],
         Field(description="List of the customer's portfolio investments"),
     ]
-    last_updated: Annotated[
-        str, Field(description="Last update timestamp in ISO 8601 format")
+    last_updated: Optional[
+        Annotated[str, Field(description="Last update timestamp in ISO 8601 format")]
     ]
 
 

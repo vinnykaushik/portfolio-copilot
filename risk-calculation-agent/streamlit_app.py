@@ -2,7 +2,7 @@ import streamlit as st
 import asyncio
 import json
 from dotenv import load_dotenv
-from agent import agent, tool_descriptions, get_agent_response, extract_response_content
+from agent import agent, tool_descriptions, get_response, extract_response_content
 
 # Load environment variables
 load_dotenv()
@@ -175,7 +175,7 @@ def main():
 
             # Get agent response
             with st.spinner("Calculating..."):
-                response = asyncio.run(get_agent_response(prompt))
+                response = asyncio.run(get_response(prompt))
 
                 # Extract the actual response content
                 response_content = extract_response_content(response)

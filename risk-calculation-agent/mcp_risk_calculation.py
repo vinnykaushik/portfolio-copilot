@@ -407,28 +407,25 @@ def calculate_portfolio_expected_return(
     portfolio_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Calculate expected return for a customer portfolio using CAPM
-    Only includes stocks and crypto (excludes mutual funds)
+        Calculate expected return for a customer portfolio using CAPM
+        Only includes stocks and crypto (excludes mutual funds)
 
-    Args:
-        portfolio_data: Dictionary containing portfolio information with structure:
-        {
-            "customer_id": "string",
-            "customer_name": "string",
-            "investments": [
-                {
-                    "type": "stocks" | "crypto" | "mutual_funds",
-                    "symbol": "string (for stocks/crypto)",
-                    "quantity": number (for stocks/crypto),
-                    "name": "string (for mutual funds)",
-                    "value": number (for mutual funds)
-                }
-            ],
-            "last_updated": "ISO 8601 timestamp"
-        }
+        Args:
+            portfolio_data: Dictionary containing portfolio information with structure:
+            {
+                "investments": [
+                    {
+                        "type": "stocks" | "crypto" | "mutual_funds",
+                        "symbol": "string (for stocks/crypto)",
+                        "quantity": number (for stocks/crypto),
+                        "name": "string (for mutual funds)",
+                        "value": number (for mutual funds)
+                    }
+                ],
+    }
 
-    Returns:
-        Dictionary containing portfolio analysis including expected return
+        Returns:
+            Dictionary containing portfolio analysis including expected return
     """
     try:
         investments = portfolio_data.get("investments", [])
@@ -487,17 +484,18 @@ def calculate_portfolio_var(
     period: str = "1y",
 ) -> Dict[str, Any]:
     """
-    Calculate Value at Risk (VaR) for a portfolio using parametric method
+    Calculate Value at Risk (VaR) for a portfolio using parametric method. The only required param is the portfolio_data. This follows the investment structure used in calculate_portfolio_expected_return.
 
     Args:
         portfolio_data: Dictionary containing portfolio information
-        confidence_level: Confidence level (e.g., 0.95 for 95%)
-        time_horizon: Time horizon in days (default 1)
-        period: Historical period for volatility calculation (default "1y")
+        confidence_level: Confidence level (e.g., 0.95 for 95%). This is optional and defaults to 0.95
+        time_horizon: Time horizon in days (default 1). This is optional and defaults to 1.
+        period: Historical period for volatility calculation (default "1y"). This is optional and defaults to "1y".
 
     Returns:
         Dictionary containing VaR calculation results
     """
+    logging.info(f"calculate_portfolio_expected_return called with: {portfolio_data}")
     try:
         investments = portfolio_data.get("investments", [])
 
@@ -796,7 +794,7 @@ def calculate_portfolio_cvar(
 
     Args:
         portfolio_data: Dictionary containing portfolio information
-        confidence_level: Confidence level (e.g., 0.95 for 95%)
+        confidence_level: Confidence level (e.g., 0.95 for 95%). This is optional and defaults to 0.95
         time_horizon: Time horizon in days (default 1)
         period: Historical period for volatility calculation (default "1y")
 
