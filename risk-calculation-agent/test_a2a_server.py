@@ -54,7 +54,40 @@ async def run_single_turn_test(client: A2AClient) -> None:
     """Runs a single-turn non-streaming test."""
 
     send_message_payload = create_send_message_payload(
-        text="What's the VaR of a portfolio with 100 AAPL and 100 GOOGL?"
+        text="""what is the expected return of this portfolio?'More actions
+                                  {
+                                    "customer_id": "33333",
+                                    "customer_name": "Carl Pei",
+                                    "portfolio_value": 320000,
+                                    "investments": [
+                                        {
+                                            "type": "stocks",
+                                            "symbol": "NVDA",
+                                            "quantity": 40,
+                                        },
+                                        {
+                                            "type": "stocks",
+                                            "symbol": "AMD",
+                                            "quantity": 18,
+                                        },
+                                        {
+                                            "type": "mutual_funds",
+                                            "name": "Technology Select Sector SPDR Fund",
+                                            "value": 90000,
+                                        },
+                                        {
+                                            "type": "stocks",
+                                            "symbol": "INTC",
+                                            "quantity": 25,
+                                        },
+                                        {
+                                            "type": "bonds",
+                                            "name": "Corporate Bond Index Fund",
+                                            "value": 45000,
+                                        },
+                                    ],
+                                    "last_updated": "2025-06-18",
+                                }"""
     )
     request = SendMessageRequest(
         id=str(uuid4()), params=MessageSendParams(**send_message_payload)
@@ -122,7 +155,7 @@ async def run_multi_turn_test(client: A2AClient) -> None:
         if task.status.state == TaskState.input_required and context_id:
             print("--- 📝 Multi-Turn: Second Turn (Input Required) ---")
             second_turn_payload = create_send_message_payload(
-                "in GBP", task.id, context_id
+                "And 300 GOOGL", task.id, context_id
             )
             request2 = SendMessageRequest(
                 id=str(uuid4()), params=MessageSendParams(**second_turn_payload)

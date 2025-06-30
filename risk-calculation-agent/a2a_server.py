@@ -1,10 +1,17 @@
 from agent_executor import RiskCalculationAgentExecutor
 from agent import get_mcp_tools
-from a2a.server.apps import A2AFastAPIApplication
+from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from typing import List
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 def convert_mcp_tools_to_a2a_skills(tools_list: List) -> List[AgentSkill]:
@@ -61,27 +68,43 @@ def _extract_main_description(description: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp_tools = get_mcp_tools()
-    a2a_skills = convert_mcp_tools_to_a2a_skills(mcp_tools)
+    logger.info("Starting Risk Calculation Agent server...")
 
-    agent_card = AgentCard(
-        name="Risk Calculation Agent",
-        description="An agent that calculates risk (e.g., VaR, CVaR, etc) for a portfolio.",
-        url="http://localhost:9999",
-        version="1.0.0",
-        defaultInputModes=["text"],
-        defaultOutputModes=["text"],
-        capabilities=AgentCapabilities(streaming=True),
-        skills=a2a_skills,
-    )
+    try:
+        logger.info("Getting MCP tools...")
+        mcp_tools = get_mcp_tools()
+        logger.info(f"Found {len(mcp_tools)} MCP tools")
 
-    request_handler = DefaultRequestHandler(
-        agent_executor=RiskCalculationAgentExecutor(),
-        task_store=InMemoryTaskStore(),
-    )
+        a2a_skills = convert_mcp_tools_to_a2a_skills(mcp_tools)
+        logger.info(f"Converted to {len(a2a_skills)} A2A skills")
 
-    server = A2AFastAPIApplication(agent_card=agent_card, http_handler=request_handler)
+        agent_card = AgentCard(
+            name="Risk Calculation Agent",
+            description="An agent that calculates risk (e.g., VaR, CVaR, etc) for a portfolio.",
+            url="http://localhost:9999",
+            version="1.0.0",
+            defaultInputModes=["text"],
+            defaultOutputModes=["text"],
+            capabilities=AgentCapabilities(streaming=True),
+            skills=a2a_skills,
+        )
 
-    import uvicorn
+        logger.info("Creating request handler...")
+        request_handler = DefaultRequestHandler(
+            agent_executor=RiskCalculationAgentExecutor(),
+            task_store=InMemoryTaskStore(),
+        )
 
-    uvicorn.run(server.build(), host="0.0.0.0", port=9999)
+        logger.info("Creating A2A FastAPI application...")
+        server = A2AStarletteApplication(
+            agent_card=agent_card, http_handler=request_handler
+        )
+
+        logger.info("Starting server on http://0.0.0.0:9999...")
+        import uvicorn
+
+        uvicorn.run(server.build(), host="0.0.0.0", port=9999, log_level="info")
+
+    except Exception as e:
+        logger.error(f"Failed to start server: {str(e)}", exc_info=True)
+        raise

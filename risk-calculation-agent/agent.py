@@ -1,11 +1,20 @@
+from abc import get_cache_token
 import os
 import asyncio
 from dotenv import load_dotenv
+from httpx import get
+from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
-from typing import List, Any
+from typing import AsyncIterable, List, Any, Literal
+import logging
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize at module level (keeping your existing approach)
 load_dotenv()
@@ -16,6 +25,9 @@ if google_api_key is not None:
 MPC_SERVER_LOCATION = os.path.join(
     os.path.abspath(os.path.dirname(__file__)), "mcp_risk_calculation.py"
 )
+
+# Pre-initialize the MCP client and tools at module level
+logger.info("Initializing MCP client...")
 client = MultiServerMCPClient(
     {
         "risk-calculation-agent": {
@@ -29,17 +41,13 @@ client = MultiServerMCPClient(
 checkpointer = InMemorySaver()
 config = {"configurable": {"thread_id": 1}}
 
+# Pre-initialize tools and agent
+logger.info("Initializing tools and agent...")
+tools = asyncio.run(client.get_tools())  # Get tools once at startup
+
 
 def format_mcp_tools(tools_list: List) -> str:
-    """
-    Format an MCP tool list into human-readable markdown format.
-
-    Args:
-        tools_list: List of StructuredTool objects
-
-    Returns:
-        str: Formatted markdown string
-    """
+    # ... (keep your existing format_mcp_tools function) ...
     if not tools_list:
         return "No tools available.\n"
 
@@ -159,44 +167,128 @@ def get_mcp_tools() -> List:
     """
     Retrieve the list of tools from the MCP client.
     """
-    return asyncio.run(client.get_tools())
+    return tools  # Return pre-initialized tools
 
 
-# Initialize tools and agent at module level
-def initialize_agent():
-    tools = get_mcp_tools()
-    tool_descriptions = format_mcp_tools(tools)
+# Initialize agent at module level
+tool_descriptions = format_mcp_tools(tools)
 
-    risk_calculation_prompt = f"""
-    # Overview - Risk Calculation Agent
-    You are a helpful risk calculation agent. Your job is to analyze financial portfolios and calculate various risk metrics based on the provided data.
-    Your capabilities are limited to the tools available to you, which are listed below:
+risk_calculation_prompt = f"""
+# Overview - Risk Calculation Agent
+You are a helpful risk calculation agent. Your job is to analyze financial portfolios and calculate various risk metrics based on the provided data.
+Your capabilities are limited to the tools available to you, which are listed below:
 
-    # Tools
-    {tool_descriptions}
+# Tools
+{tool_descriptions}
 
-    # Instructions
-    - Use the tools to perform calculations and return results in a structured format.
-    - Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
-    - When presenting results, format them clearly and explain what each metric means.
-    - If asked about portfolio analysis, break down the results by investment type and provide insights.
-    """
+# Instructions
+- Use the tools to perform calculations and return results in a structured format.
+- Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
+- If needed, reformat the input data to match the tool's schema.
+- When presenting results, format them clearly and explain what each metric means.
+- If asked about portfolio analysis, break down the results by investment type and provide insights.
+"""
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
 
-    return (
-        create_react_agent(
-            name="Risk Calculation Agent",
-            model=llm,
-            prompt=risk_calculation_prompt,
-            tools=tools,
-            checkpointer=checkpointer,
-        ),
-        config,
+
+class ResponseFormat(BaseModel):
+    """Respond to the user in this format."""
+
+    status: Literal["input_required", "completed", "error"] = "input_required"
+    message: str
+
+
+class RiskCalculationAgent:
+    """Risk Calculation Agent Example."""
+
+    FORMAT_INSTRUCTION = (
+        "Set response status to input_required if the user needs to provide more information to complete the request."
+        "Set response status to error if there is an error while processing the request."
+        "Set response status to completed if the request is complete."
     )
 
+    def __init__(self):
+        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+        self.tools = tools  # Use pre-initialized tools
+        logger.info(f"Creating Risk Calculation Agent graph with tools {self.tools}")
 
-agent = initialize_agent()
+        self.graph = create_react_agent(
+            self.model,
+            tools=self.tools,
+            checkpointer=checkpointer,
+            prompt=risk_calculation_prompt,
+            response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
+        )
+        logger.info("Risk Calculation Agent initialized!")
+
+    async def stream(self, query, context_id) -> AsyncIterable[dict[str, Any]]:
+        logger.info(f"Streaming query: {query}")
+        inputs = {"messages": [("user", query)]}
+        config = {"configurable": {"thread_id": context_id}}
+
+        for item in self.graph.stream(inputs, config, stream_mode="values"):  # type: ignore
+            message = item["messages"][-1]
+            if (
+                isinstance(message, AIMessage)
+                and message.tool_calls
+                and len(message.tool_calls) > 0
+            ):
+                yield {
+                    "is_task_complete": False,
+                    "require_user_input": False,
+                    "content": "Processing query with tools...",
+                }
+            elif isinstance(message, ToolMessage):
+                yield {
+                    "is_task_complete": False,
+                    "require_user_input": False,
+                    "content": "Processing tool call...",
+                }
+
+        yield self.get_agent_response(config)
+
+    def get_agent_response(self, config):
+        logger.info(f"Getting agent response for config: {config}")
+        current_state = self.graph.get_state(config)
+        structured_response = current_state.values.get("structured_response")
+        logger.info(f"Structured response: {structured_response}")
+        if structured_response and isinstance(structured_response, ResponseFormat):
+            if structured_response.status == "input_required":
+                return {
+                    "is_task_complete": False,
+                    "require_user_input": True,
+                    "content": structured_response.message,
+                }
+            if structured_response.status == "error":
+                return {
+                    "is_task_complete": False,
+                    "require_user_input": True,
+                    "content": structured_response.message,
+                }
+            if structured_response.status == "completed":
+                return {
+                    "is_task_complete": True,
+                    "require_user_input": False,
+                    "content": structured_response.message,
+                }
+
+        return {
+            "is_task_complete": False,
+            "require_user_input": True,
+            "content": (
+                "We are unable to process your request at the moment. "
+                "Please try again."
+            ),
+        }
+
+
+agent_instance = RiskCalculationAgent()
+
+
+def initialize_agent():
+    """Return the pre-initialized agent and config."""
+    return agent_instance, config
 
 
 def extract_response_content(response: Any) -> str:
@@ -241,57 +333,9 @@ def extract_response_content(response: Any) -> str:
 async def get_agent_response(message: str) -> Any:
     """Get response from the agent."""
     try:
-        response = await agent.ainvoke(
+        response = await agent_instance.get_agent_response(
             {"messages": [{"role": "user", "content": message}]}, config=config  # type: ignore
         )
         return response
     except Exception as e:
         return f"Error: {str(e)}"
-
-
-async def main():
-    response = await agent.ainvoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": """what is the conditional VaR of this portfolio?'
-                                  {
-                                    "customer_id": "33333",
-                                    "customer_name": "Carl Pei",
-                                    "portfolio_value": 320000,
-                                    "investments": [
-                                        {
-                                            "type": "stocks",
-                                            "symbol": "NVDA",
-                                            "quantity": 40,
-                                        },
-                                        {
-                                            "type": "stocks",
-                                            "symbol": "AMD",
-                                            "quantity": 18,
-                                        },
-                                        {
-                                            "type": "mutual_funds",
-                                            "name": "Technology Select Sector SPDR Fund",
-                                            "value": 90000,
-                                        },
-                                        {
-                                            "type": "stocks",
-                                            "symbol": "INTC",
-                                            "quantity": 25,
-                                        },
-                                    ],
-                                    "last_updated": "2025-06-18",
-                                }""",
-                }
-            ]
-        }
-    )
-
-    print(response)
-
-
-""" if __name__ == "__main__":
-    asyncio.run(main())
- """
