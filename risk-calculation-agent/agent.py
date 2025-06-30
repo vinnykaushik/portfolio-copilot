@@ -41,13 +41,11 @@ client = MultiServerMCPClient(
 checkpointer = InMemorySaver()
 config = {"configurable": {"thread_id": 1}}
 
-# Pre-initialize tools and agent
 logger.info("Initializing tools and agent...")
 tools = asyncio.run(client.get_tools())  # Get tools once at startup
 
 
 def format_mcp_tools(tools_list: List) -> str:
-    # ... (keep your existing format_mcp_tools function) ...
     if not tools_list:
         return "No tools available.\n"
 
@@ -227,60 +225,121 @@ class RiskCalculationAgent:
         inputs = {"messages": [("user", query)]}
         config = {"configurable": {"thread_id": context_id}}
 
-        for item in self.graph.stream(inputs, config, stream_mode="values"):  # type: ignore
-            message = item["messages"][-1]
-            if (
-                isinstance(message, AIMessage)
-                and message.tool_calls
-                and len(message.tool_calls) > 0
-            ):
-                yield {
-                    "is_task_complete": False,
-                    "require_user_input": False,
-                    "content": "Processing query with tools...",
-                }
-            elif isinstance(message, ToolMessage):
-                yield {
-                    "is_task_complete": False,
-                    "require_user_input": False,
-                    "content": "Processing tool call...",
-                }
+        try:
+            # Add detailed logging for each step
+            step_count = 0
+            async for item in self.graph.astream(inputs, config, stream_mode="values"):  # type: ignore
+                step_count += 1
+                logger.info(f"Stream step {step_count}: {type(item)}")
 
-        yield self.get_agent_response(config)
+                message = item["messages"][-1]
+                logger.info(
+                    f"Message type: {type(message)}, content preview: {str(message)[:200]}"
+                )
+
+                if (
+                    isinstance(message, AIMessage)
+                    and message.tool_calls
+                    and len(message.tool_calls) > 0
+                ):
+                    logger.info(
+                        f"Tool calls: {[tc.get('name', 'unknown') for tc in message.tool_calls]}"
+                    )
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "content": "Processing query with tools...",
+                    }
+                elif isinstance(message, ToolMessage):
+                    logger.info(
+                        f"Tool message content: {message.content[:200] if message.content else 'None'}"
+                    )
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "content": "Processing tool call...",
+                    }
+
+            # Get final response with enhanced error handling
+            final_response = self.get_agent_response(config)
+            logger.info(f"Final response: {final_response}")
+            yield final_response
+
+        except Exception as e:
+            logger.error(f"Error in stream method: {str(e)}", exc_info=True)
+            yield {
+                "is_task_complete": False,
+                "require_user_input": True,
+                "content": f"Error processing request: {str(e)}",
+            }
 
     def get_agent_response(self, config):
         logger.info(f"Getting agent response for config: {config}")
-        current_state = self.graph.get_state(config)
-        structured_response = current_state.values.get("structured_response")
-        logger.info(f"Structured response: {structured_response}")
-        if structured_response and isinstance(structured_response, ResponseFormat):
-            if structured_response.status == "input_required":
-                return {
-                    "is_task_complete": False,
-                    "require_user_input": True,
-                    "content": structured_response.message,
-                }
-            if structured_response.status == "error":
-                return {
-                    "is_task_complete": False,
-                    "require_user_input": True,
-                    "content": structured_response.message,
-                }
-            if structured_response.status == "completed":
-                return {
-                    "is_task_complete": True,
-                    "require_user_input": False,
-                    "content": structured_response.message,
-                }
+        try:
+            current_state = self.graph.get_state(config)
+            logger.info(
+                f"Current state keys: {list(current_state.values.keys()) if current_state.values else 'None'}"
+            )
 
-        return {
-            "is_task_complete": False,
-            "require_user_input": True,
-            "content": (
-                "We are unable to process your request at the moment. "
-                "Please try again."
-            ),
-        }
+            structured_response = current_state.values.get("structured_response")
+            logger.info(f"Structured response: {structured_response}")
+
+            # Check if we have messages in the state
+            messages = current_state.values.get("messages", [])
+            if messages:
+                last_message = messages[-1]
+                logger.info(f"Last message type: {type(last_message)}")
+                logger.info(
+                    f"Last message content: {getattr(last_message, 'content', 'No content')}"
+                )
+
+            if structured_response and isinstance(structured_response, ResponseFormat):
+                if structured_response.status == "input_required":
+                    return {
+                        "is_task_complete": False,
+                        "require_user_input": True,
+                        "content": structured_response.message,
+                    }
+                if structured_response.status == "error":
+                    return {
+                        "is_task_complete": False,
+                        "require_user_input": True,
+                        "content": structured_response.message,
+                    }
+                if structured_response.status == "completed":
+                    return {
+                        "is_task_complete": True,
+                        "require_user_input": False,
+                        "content": structured_response.message,
+                    }
+
+            # Fallback: try to extract content from the last message
+            if messages and hasattr(messages[-1], "content"):
+                content = messages[-1].content
+                if content and not content.startswith("I am sorry"):
+                    return {
+                        "is_task_complete": True,
+                        "require_user_input": False,
+                        "content": content,
+                    }
+
+            logger.warning("No valid structured response found, returning fallback")
+            return {
+                "is_task_complete": False,
+                "require_user_input": True,
+                "content": (
+                    "We are unable to process your request at the moment. "
+                    "Please try again."
+                ),
+            }
+
+        except Exception as e:
+            logger.error(f"Error in get_agent_response: {str(e)}", exc_info=True)
+            return {
+                "is_task_complete": False,
+                "require_user_input": True,
+                "content": f"Error getting agent response: {str(e)}",
+            }
 
 
 agent_instance = RiskCalculationAgent()
@@ -330,10 +389,10 @@ def extract_response_content(response: Any) -> str:
         return f"Error extracting response: {str(e)}"
 
 
-async def get_agent_response(message: str) -> Any:
+async def get_response(message: str) -> Any:
     """Get response from the agent."""
     try:
-        response = await agent_instance.get_agent_response(
+        response = await agent_instance.graph.ainvoke(
             {"messages": [{"role": "user", "content": message}]}, config=config  # type: ignore
         )
         return response

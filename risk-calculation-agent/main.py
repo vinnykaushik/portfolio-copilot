@@ -9,7 +9,7 @@ import asyncio
 import sys
 import json
 from typing import Optional
-from agent import get_agent_response, extract_response_content
+from agent import get_response, extract_response_content
 
 
 class RiskAgentCLI:
@@ -97,7 +97,7 @@ class RiskAgentCLI:
         # Process the question with the agent
         try:
             print("\n🤔 Thinking...")
-            response = await get_agent_response(user_input)
+            response = await get_response(user_input)
 
             # Extract and format the response
             response_content = extract_response_content(response)
