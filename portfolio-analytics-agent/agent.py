@@ -145,7 +145,9 @@ def initialize_agent():
     - Highlight notable exposures or concentrations
     - Suggest diversification improvements when appropriate
 
-    Remember to validate portfolio data structure before calling tools and provide meaningful insights rather than just raw numbers.
+    # Instructions
+    - Remember to validate portfolio data structure before calling tools and provide meaningful insights rather than just raw numbers.
+    - If needed, reformat the provided portfolio data to match the expected schema.
     """
 
     return Agent(
