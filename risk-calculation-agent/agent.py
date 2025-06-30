@@ -184,12 +184,15 @@ def initialize_agent():
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
 
-    return create_react_agent(
-        name="Risk Calculation Agent",
-        model=llm,
-        prompt=risk_calculation_prompt,
-        tools=tools,
-        checkpointer=checkpointer,
+    return (
+        create_react_agent(
+            name="Risk Calculation Agent",
+            model=llm,
+            prompt=risk_calculation_prompt,
+            tools=tools,
+            checkpointer=checkpointer,
+        ),
+        config,
     )
 
 
