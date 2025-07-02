@@ -1,26 +1,25 @@
-from json import load, tool
-from urllib import response
+from json import tool
 from dotenv import load_dotenv
 from uuid import uuid4
 import os
 from langgraph.prebuilt import create_react_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel
 from typing import Literal, Any
 import logging
 import httpx
-from a2a.client.client import A2AClient, A2ACardResolver
+from a2a.client.client import A2AClient
 from a2a.types import (
     SendMessageResponse,
     GetTaskResponse,
     SendMessageSuccessResponse,
     Task,
-    TaskState,
     SendMessageRequest,
     MessageSendParams,
     GetTaskRequest,
     TaskQueryParams,
-    SendStreamingMessageRequest,
 )
 import asyncio
 from langchain_core.tools import tool
@@ -228,6 +227,8 @@ class PortfolioCopilotAgent:
             tools=self.tools,
             prompt="You are a helpful portfolio copilot agent.",
             response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
+            checkpointer=InMemorySaver(),
+            # store=InMemoryStore(),
         )
 
 

@@ -1,6 +1,7 @@
 import streamlit as st
 import asyncio
 import json
+import uuid
 from datetime import datetime
 from typing import Dict, Any
 import sys
@@ -91,6 +92,9 @@ if "agent" not in st.session_state:
     st.session_state.agent = None
 if "agent_initialized" not in st.session_state:
     st.session_state.agent_initialized = False
+if "thread_id" not in st.session_state:
+    # Create a unique thread ID for this Streamlit session
+    st.session_state.thread_id = f"streamlit_{uuid.uuid4().hex[:8]}"
 
 
 class SyncAgentWrapper:
@@ -157,7 +161,9 @@ class SyncAgentWrapper:
 
     async def _async_invoke(self, messages: dict):
         """Internal async invoke method"""
-        return await self.agent.agent.ainvoke(messages)
+        # Use the session-specific thread ID for checkpointer
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        return await self.agent.agent.ainvoke(messages, config=config)
 
 
 def initialize_agent():
