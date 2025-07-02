@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
         agent_card = AgentCard(
             name="Customer Portfolio Agent",
-            description="An agent that retrieves and manages customer portfolio information.",
+            description="An agent that retrieves and manages customer portfolio information. It can fetch all portfolios and retrieve specific portfolios by ID or name.",
             url="http://localhost:7777",
             version="1.0.0",
             defaultInputModes=["text"],
