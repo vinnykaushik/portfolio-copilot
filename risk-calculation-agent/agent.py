@@ -213,6 +213,7 @@ class RiskCalculationAgent:
 
         self.graph = create_react_agent(
             self.model,
+            name="risk_calculation_agent",
             tools=self.tools,
             checkpointer=checkpointer,
             prompt=risk_calculation_prompt,

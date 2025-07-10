@@ -229,7 +229,7 @@ class PortfolioCopilotAgent:
 
     SYSTEM_PROMPT = f"""
     # Overview
-    You are a helpful portfolio copilot agent. You use your tools to assist users with their portfolio management tasks.
+    You are a helpful portfolio copilot agent. You use your tools to assist users with their portfolio management tasks. You fetch portfolio data and perform various operations on said data.
     
     # Tools
     Note that the tools that you have access to are themselves agents, and you may need to converse with them to complete your task.
@@ -264,6 +264,7 @@ class PortfolioCopilotAgent:
         self.agent = create_react_agent(
             model=self.model,
             tools=self.tools,
+            name="portfolio_copilot_agent",
             prompt="You are a helpful portfolio copilot agent.",
             response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
             checkpointer=InMemorySaver(),
