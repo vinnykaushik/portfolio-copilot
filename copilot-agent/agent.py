@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import Literal, Any
 import logging
 import httpx
-from a2a.client.client import A2AClient
+from a2a.client.client import A2AClient, A2ACardResolver
 from a2a.types import (
     SendMessageResponse,
     GetTaskResponse,
@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")
+TRACKING_AUTH_USERNAME = os.getenv("TRACKING_AUTH_USERNAME", "")
+TRACKING_AUTH_PASSWORD = os.getenv("TRACKING_AUTH_PASSWORD", "")
 
 TIMEOUT_SETTINGS = httpx.Timeout(
     connect=30.0,  # 30 seconds to connect
@@ -44,10 +46,15 @@ def _get_a2a_descriptions() -> str:
         "customer_portfolio_tool": "http://localhost:7777",
         "risk_calculation_tool": "http://localhost:9999",
         "portfolio_analytics_tool": "http://localhost:8888",
+        "performance_tracking_tool": "https://performance-tracking-agent-906909573150.us-central1.run.app",
     }
     descriptions = ""
     for agent, base_url in map.items():
-        agent_card = httpx.get(base_url + "/.well-known/agent.json")
+        # Add verify=False for HTTPS URLs
+        if base_url.startswith("https"):
+            agent_card = httpx.get(base_url + "/.well-known/agent.json", verify=False)
+        else:
+            agent_card = httpx.get(base_url + "/.well-known/agent.json")
         descriptions += f"- **{agent}**:\n" f"Description: {agent_card.json()}\n\n"
     return descriptions
 
@@ -133,6 +140,29 @@ async def portfolio_analytics_tool(message: str) -> str | None:
         return "Error connecting to the portfolio analytics agent."
 
 
+@tool
+async def performance_tracking_tool(message: str) -> str | None:
+    """Sends a message to the performance tracking agent and returns the response."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
+            global performance_tracking_agent
+            performance_tracking_agent = await A2AClient.get_client_from_agent_card_url(
+                httpx_client,
+                "https://performance-tracking-agent-906909573150.us-central1.run.app",
+                http_kwargs={
+                    "auth": (
+                        TRACKING_AUTH_USERNAME,
+                        TRACKING_AUTH_PASSWORD,
+                    )
+                },
+            )
+            logger.info("✅ Connected to the performance tracking agent.")
+            return await _send_message_to_a2a_agent(message, performance_tracking_agent)
+    except Exception as e:
+        logger.error(f"Error connecting to the performance tracking agent: {e}")
+        return "Error connecting to the performance tracking agent."
+
+
 async def _send_message_to_a2a_agent(message: str, client: A2AClient) -> str | None:
     """Sends a message to an A2A agent and retrieves the response."""
     try:
@@ -140,7 +170,15 @@ async def _send_message_to_a2a_agent(message: str, client: A2AClient) -> str | N
         request = SendMessageRequest(
             id=str(uuid4()), params=MessageSendParams(**payload)
         )
-        response: SendMessageResponse = await client.send_message(request)
+        response: SendMessageResponse = await client.send_message(
+            request,
+            http_kwargs={
+                "auth": (
+                    TRACKING_AUTH_USERNAME,
+                    TRACKING_AUTH_PASSWORD,
+                )
+            },
+        )
         answer = _print_json_response(response, "📥 Single Turn Request Response")
 
         if not isinstance(response.root, SendMessageSuccessResponse):
@@ -219,6 +257,7 @@ class PortfolioCopilotAgent:
             customer_portfolio_tool,
             risk_calculation_tool,
             portfolio_analytics_tool,
+            performance_tracking_tool,
         ]
         logger.info("🏃‍➡️ Creating Portfolio Copilot Agent...")
         logger.info(f"Using tools: {_get_a2a_descriptions()}")
