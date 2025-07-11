@@ -1,6 +1,4 @@
-from json import load
 import os
-import sys
 import base64
 from dotenv import load_dotenv
 
