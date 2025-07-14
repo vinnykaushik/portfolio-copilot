@@ -26,6 +26,10 @@ MPC_SERVER_LOCATION = os.path.join(
     os.path.abspath(os.path.dirname(__file__)), "mcp_risk_calculation.py"
 )
 
+from langfuse.langchain import CallbackHandler
+
+langfuse_handler = CallbackHandler()
+
 # Pre-initialize the MCP client and tools at module level
 logger.info("Initializing MCP client...")
 client = MultiServerMCPClient(
@@ -39,7 +43,7 @@ client = MultiServerMCPClient(
 )
 
 checkpointer = InMemorySaver()
-config = {"configurable": {"thread_id": 1}}
+config = {"configurable": {"thread_id": 1}, "callbacks": [langfuse_handler]}
 
 logger.info("Initializing tools and agent...")
 tools = asyncio.run(client.get_tools())  # Get tools once at startup
