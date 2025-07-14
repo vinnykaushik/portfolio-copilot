@@ -1,13 +1,16 @@
 from json import tool
+import json
+from types import CoroutineType
 from dotenv import load_dotenv
 from uuid import uuid4
 import os
+import langfuse
 from langgraph.prebuilt import create_react_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel
-from typing import Literal, Any
+from typing import Dict, Literal, Any
 import logging
 import httpx
 from a2a.client.client import A2AClient, A2ACardResolver
@@ -39,6 +42,10 @@ TIMEOUT_SETTINGS = httpx.Timeout(
     write=30.0,  # 30 seconds to write
     pool=30.0,  # 30 seconds for pool operations
 )
+
+from langfuse.langchain import CallbackHandler
+
+langfuse_handler = CallbackHandler()
 
 
 def _get_a2a_descriptions() -> str:
@@ -269,6 +276,15 @@ class PortfolioCopilotAgent:
             response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
             checkpointer=InMemorySaver(),
             # store=InMemoryStore(),
+        )
+
+    async def ainvoke_with_tracing(self, messages, config) -> dict[str, Any]:
+        """Get response from the agent synchronously"""
+        config["callbacks"] = [langfuse_handler]
+        logger.info(f"config: {config}")
+        return await self.agent.ainvoke(
+            messages,
+            config=config,
         )
 
 

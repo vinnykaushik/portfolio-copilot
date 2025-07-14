@@ -163,7 +163,7 @@ class SyncAgentWrapper:
         """Internal async invoke method"""
         # Use the session-specific thread ID for checkpointer
         config = {"configurable": {"thread_id": st.session_state.thread_id}}
-        return await self.agent.agent.ainvoke(messages, config=config)
+        return await self.agent.ainvoke_with_tracing(messages, config=config)
 
 
 def initialize_agent():
