@@ -29,7 +29,7 @@ from google.adk.agents import Agent
 from pydantic import BaseModel
 
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")
-LLM_MODEL = "gemini-2.5-flash"
+LLM_MODEL = "gemini-2.5-flash-lite"
 
 
 class CustomerPortfolio(BaseModel):

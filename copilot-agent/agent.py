@@ -259,7 +259,7 @@ class PortfolioCopilotAgent:
     )
 
     def __init__(self):
-        self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
         self.tools = [
             customer_portfolio_tool,
             risk_calculation_tool,
