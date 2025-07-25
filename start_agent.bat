@@ -3,7 +3,6 @@ echo Starting Portfolio Copilot System...
 
 REM Start all agents in separate windows
 start "Customer Portfolio Agent" cmd /c "cd /d "%~dp0customer-portfolio-agent" && uv sync --frozen && uv run a2a_server.py"
-start "Portfolio Analytics Agent" cmd /c "cd /d "%~dp0portfolio-analytics-agent" && uv sync --frozen && uv run a2a_server.py"
 start "Risk Calculation Agent" cmd /c "cd /d "%~dp0risk-calculation-agent" && uv sync --frozen && uv run a2a_server.py"
 
 REM Wait for agents to start
