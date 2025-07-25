@@ -49,7 +49,7 @@ if __name__ == "__main__":
         agent_card = AgentCard(
             name="Customer Portfolio Agent",
             description="An agent that retrieves and manages customer portfolio information. It can fetch all portfolios and retrieve specific portfolios by ID or name.",
-            url="http://localhost:7777",
+            url="http://localhost:8888",
             version="1.0.0",
             defaultInputModes=["text"],
             defaultOutputModes=["text"],
@@ -68,10 +68,10 @@ if __name__ == "__main__":
             agent_card=agent_card, http_handler=request_handler
         )
 
-        logger.info("Starting server on http://0.0.0.0:7777...")
+        logger.info("Starting server on http://0.0.0.0:8888...")
         import uvicorn
 
-        uvicorn.run(server.build(), host="0.0.0.0", port=7777, log_level="info")
+        uvicorn.run(server.build(), host="0.0.0.0", port=8888, log_level="info")
 
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}", exc_info=True)
