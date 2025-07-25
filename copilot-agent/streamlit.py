@@ -305,7 +305,7 @@ def main():
         st.markdown(
             """
         ### Available Tools:
-        - **Customer Portfolio Tool** (Port 7777)
+        - **Customer Portfolio Tool** (Port 8888)
         - **Risk Calculation Tool** (Port 9999)  
         - **Portfolio Analytics Tool** (Port 8888)
         

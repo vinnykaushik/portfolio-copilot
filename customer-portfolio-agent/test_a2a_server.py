@@ -18,7 +18,7 @@ from a2a.types import (
 )
 import httpx
 
-AGENT_URL = os.getenv("AGENT_URL", "http://localhost:7777")
+AGENT_URL = os.getenv("AGENT_URL", "http://localhost:8888")
 
 # Increase timeout settings
 TIMEOUT_SETTINGS = httpx.Timeout(

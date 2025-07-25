@@ -50,9 +50,8 @@ langfuse_handler = CallbackHandler()
 
 def _get_a2a_descriptions() -> str:
     map = {
-        "customer_portfolio_tool": "http://localhost:7777",
+        "customer_portfolio_tool": "http://localhost:8888",
         "risk_calculation_tool": "http://localhost:9999",
-        "portfolio_analytics_tool": "http://localhost:8888",
         "performance_tracking_tool": "https://performance-tracking-agent-906909573150.us-central1.run.app",
     }
     descriptions = ""
@@ -106,7 +105,7 @@ async def customer_portfolio_tool(message: str) -> str | None:
         async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
             global customer_portfolio_client
             customer_portfolio_client = await A2AClient.get_client_from_agent_card_url(
-                httpx_client, "http://localhost:7777"
+                httpx_client, "http://localhost:8888"
             )
             logger.info("✅ Connected to the customer portfolio agent.")
             return await _send_message_to_a2a_agent(message, customer_portfolio_client)
@@ -129,22 +128,6 @@ async def risk_calculation_tool(message: str) -> str | None:
     except Exception as e:
         logger.error(f"Error connecting to the risk calculation agent: {e}")
         return "Error connecting to the risk calculation agent."
-
-
-@tool
-async def portfolio_analytics_tool(message: str) -> str | None:
-    """Sends a message to the portfolio analytics agent and returns the response."""
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
-            global portfolio_analytics_agent
-            portfolio_analytics_agent = await A2AClient.get_client_from_agent_card_url(
-                httpx_client, "http://localhost:8888"
-            )
-            logger.info("✅ Connected to the portfolio analytics agent.")
-            return await _send_message_to_a2a_agent(message, portfolio_analytics_agent)
-    except Exception as e:
-        logger.error(f"Error connecting to the portfolio analytics agent: {e}")
-        return "Error connecting to the portfolio analytics agent."
 
 
 @tool
@@ -259,11 +242,10 @@ class PortfolioCopilotAgent:
     )
 
     def __init__(self):
-        self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
         self.tools = [
             customer_portfolio_tool,
             risk_calculation_tool,
-            portfolio_analytics_tool,
             performance_tracking_tool,
         ]
         logger.info("🏃‍➡️ Creating Portfolio Copilot Agent...")
