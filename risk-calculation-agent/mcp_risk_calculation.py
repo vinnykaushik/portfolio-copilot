@@ -864,16 +864,266 @@ def calculate_portfolio_cvar(
         return {"error": f"Error calculating portfolio CVaR: {str(e)}"}
 
 
+# New functions from Server B, adapted to match Server A's style
+
+
+def get_price_yahoo(symbol: str) -> float:
+    """Fetches the latest price for a stock or crypto symbol from Yahoo Finance."""
+    try:
+        ticker = yf.Ticker(symbol)
+        return ticker.info.get("regularMarketPrice", 0.0)
+    except Exception:
+        return 0.0
+
+
+def calculate_position_concentration(
+    portfolio_data: Dict[str, Any],
+    top_n: int = 5,
+) -> Dict[str, Any]:
+    """
+    Calculates position-level concentration metrics using live Yahoo Finance prices.
+    Returns the portfolio value, Herfindahl-Hirschman Index (HHI), top-N concentration, and normalized position weights.
+
+    Args:
+        portfolio_data: Dictionary containing portfolio information (same structure as calculate_portfolio_expected_return)
+        top_n: Number of top holdings to include in the concentration metric (default 5, range 1-20)
+
+    Returns:
+        Dictionary containing concentration analysis results
+    """
+    try:
+        # Validate top_n parameter
+        if not isinstance(top_n, int) or top_n < 1 or top_n > 20:
+            return {"error": "top_n must be an integer between 1 and 20"}
+
+        investments = portfolio_data.get("investments", [])
+        position_values = []
+
+        for inv in investments:
+            inv_type = inv.get("type", "").lower()
+            if inv_type in ["stocks", "crypto"]:
+                symbol = inv.get("symbol", "")
+                quantity = inv.get("quantity", 0.0)
+                price = get_price_yahoo(symbol)
+                value = quantity * price
+                position_values.append({"name": symbol, "value": value})
+            elif inv_type == "mutual_funds":
+                name = inv.get("name", "Unknown")
+                value = inv.get("value", 0.0)
+                position_values.append({"name": name, "value": value})
+
+        portfolio_value = sum(p["value"] for p in position_values)
+
+        if portfolio_value == 0:
+            return {
+                "error": "Portfolio has no value",
+                "portfolio_value": 0,
+                "hhi": 0,
+                "top_n_concentration": 0,
+                "positions": [],
+            }
+
+        positions = []
+        for p in position_values:
+            weight = p["value"] / portfolio_value if portfolio_value > 0 else 0.0
+            positions.append({"name": p["name"], "weight": weight})
+
+        hhi = sum(p["weight"] ** 2 for p in positions)
+        sorted_positions = sorted(positions, key=lambda x: x["weight"], reverse=True)
+        top_n_concentration = sum(p["weight"] for p in sorted_positions[:top_n])
+
+        return {
+            "customer_id": portfolio_data.get("customer_id"),
+            "customer_name": portfolio_data.get("customer_name"),
+            "portfolio_value": round(portfolio_value, 2),
+            "hhi": round(hhi, 4),
+            "top_n_concentration": round(top_n_concentration, 4),
+            "top_n": top_n,
+            "positions": sorted_positions,
+        }
+
+    except Exception as e:
+        return {"error": f"Error calculating position concentration: {str(e)}"}
+
+
+def analyze_portfolio_exposures(
+    portfolio_data: Dict[str, Any],
+    min_threshold: float = 0.01,
+) -> Dict[str, Any]:
+    """
+    Analyzes portfolio exposures across sector, geography, and market cap dimensions using live Yahoo Finance data.
+    Returns percentage allocations and dollar values for each category.
+
+    Args:
+        portfolio_data: Dictionary containing portfolio information (same structure as calculate_portfolio_expected_return)
+        min_threshold: Minimum weight threshold to include in results (0.01 = 1%, default 0.01, range 0.0-1.0)
+
+    Returns:
+        Dictionary containing exposure analysis results
+    """
+    try:
+        # Validate min_threshold parameter
+        if (
+            not isinstance(min_threshold, (int, float))
+            or min_threshold < 0.0
+            or min_threshold > 1.0
+        ):
+            return {"error": "min_threshold must be a number between 0.0 and 1.0"}
+
+        investments = portfolio_data.get("investments", [])
+        position_data = []
+        errors = []
+
+        # Collect position data with enriched information
+        for inv in investments:
+            try:
+                inv_type = inv.get("type", "").lower()
+
+                if inv_type in ["stocks", "crypto"]:
+                    symbol = inv.get("symbol")
+                    quantity = inv.get("quantity", 0)
+
+                    if not symbol:
+                        continue
+
+                    yahoo_symbol = symbol if inv_type == "stocks" else f"{symbol}-USD"
+
+                    ticker = yf.Ticker(yahoo_symbol)
+                    info = ticker.info
+
+                    price = info.get("regularMarketPrice", 0.0)
+                    value = quantity * price
+
+                    # Extract metadata with fallbacks
+                    sector = info.get("sector", "Unknown")
+                    country = info.get("country", "Unknown")
+                    market_cap = info.get("marketCap", 0)
+
+                    position_data.append(
+                        {
+                            "name": symbol,
+                            "value": value,
+                            "sector": sector,
+                            "country": country,
+                            "market_cap": market_cap,
+                            "type": inv_type,
+                        }
+                    )
+
+                elif inv_type == "mutual_funds":
+                    name = inv.get("name", "Unknown")
+                    value = inv.get("value", 0)
+
+                    position_data.append(
+                        {
+                            "name": name,
+                            "value": value,
+                            "sector": "Mutual Funds",
+                            "country": "Mixed",
+                            "market_cap": 0,  # Not applicable
+                            "type": "mutual_funds",
+                        }
+                    )
+
+            except Exception as e:
+                symbol = (
+                    inv.get("symbol")
+                    if inv.get("symbol")
+                    else inv.get("name", "Unknown")
+                )
+                errors.append(f"Could not fetch data for {symbol}: {str(e)}")
+                continue
+
+        # Calculate total portfolio value
+        total_value = sum(p["value"] for p in position_data)
+
+        if total_value == 0:
+            return {
+                "customer_id": portfolio_data.get("customer_id"),
+                "customer_name": portfolio_data.get("customer_name"),
+                "total_portfolio_value": 0,
+                "sector_exposure": [],
+                "geography_exposure": [],
+                "market_cap_exposure": [],
+                "errors": errors + ["Portfolio has zero value"],
+            }
+
+        # Helper function to categorize market cap
+        def categorize_market_cap(market_cap: float, investment_type: str) -> str:
+            if investment_type == "mutual_funds":
+                return "Mutual Funds"
+            elif market_cap == 0:
+                return "Unknown"
+            elif market_cap < 2_000_000_000:
+                return "Small Cap"
+            elif market_cap < 10_000_000_000:
+                return "Mid Cap"
+            else:
+                return "Large Cap"
+
+        # Aggregate exposures
+        def aggregate_exposures(positions, field_name):
+            exposure_dict = {}
+            for pos in positions:
+                if field_name == "market_cap_category":
+                    category = categorize_market_cap(pos["market_cap"], pos["type"])
+                else:
+                    category = pos[field_name]
+
+                if category not in exposure_dict:
+                    exposure_dict[category] = {"value": 0, "weight": 0}
+
+                exposure_dict[category]["value"] += pos["value"]
+
+            # Calculate weights and convert to list
+            exposure_list = []
+            for category, data in exposure_dict.items():
+                weight = data["value"] / total_value
+                if weight >= min_threshold:  # Apply threshold filter
+                    exposure_list.append(
+                        {
+                            "name": category,
+                            "weight": round(weight, 4),
+                            "value": round(data["value"], 2),
+                        }
+                    )
+
+            # Sort by weight descending
+            return sorted(exposure_list, key=lambda x: x["weight"], reverse=True)
+
+        # Calculate exposures
+        sector_exposure = aggregate_exposures(position_data, "sector")
+        geography_exposure = aggregate_exposures(position_data, "country")
+        market_cap_exposure = aggregate_exposures(position_data, "market_cap_category")
+
+        return {
+            "customer_id": portfolio_data.get("customer_id"),
+            "customer_name": portfolio_data.get("customer_name"),
+            "total_portfolio_value": round(total_value, 2),
+            "sector_exposure": sector_exposure,
+            "geography_exposure": geography_exposure,
+            "market_cap_exposure": market_cap_exposure,
+            "min_threshold": min_threshold,
+            "errors": errors,
+        }
+
+    except Exception as e:
+        return {"error": f"Error analyzing portfolio exposures: {str(e)}"}
+
+
 # MCP Tool Definitions
 mcp.tool(calculate_expected_return)
 mcp.tool(calculate_portfolio_expected_return)
 mcp.tool(calculate_portfolio_var)
 mcp.tool(calculate_portfolio_cvar)
+mcp.tool(calculate_position_concentration)
+mcp.tool(analyze_portfolio_exposures)
 
 
-""" if __name__ == "__main__":
+if __name__ == "__main__":
+    mcp.run()
     # Example usage
-    sample_portfolio = {
+    """  """ """ sample_portfolio = {
         "customer_id": "123",
         "customer_name": "John Doe",
         "investments": [
@@ -887,7 +1137,12 @@ mcp.tool(calculate_portfolio_cvar)
     # Test the functions
     result = calculate_portfolio_expected_return(sample_portfolio)
     print("Portfolio Expected Return:", result)
-    
+
     var_result = calculate_portfolio_var(sample_portfolio)
     print("Portfolio VaR:", var_result)
- """
+
+    concentration_result = calculate_position_concentration(sample_portfolio)
+    print("Portfolio Concentration:", concentration_result)
+
+    exposure_result = analyze_portfolio_exposures(sample_portfolio)
+    print("Portfolio Exposures:", exposure_result) """
