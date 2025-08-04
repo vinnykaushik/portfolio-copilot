@@ -195,6 +195,27 @@ class PortfolioCopilotAgent:
         INTC: 4.52%
     This analysis reveals that the portfolio is heavily weighted towards NVDA, which makes up the majority of the portfolio's value. AMD represents a significant portion as well, while INTC has a relatively small position. The HHI indicates moderate concentration, which is also reflected in the top-N concentration and position weights.
 
+    # CRITICAL INSTRUCTIONS FOR REPORTING:
+    1. **ALWAYS include the FULL response from tools in your answer to the user**
+    2. **DO NOT summarize or condense the information received from tools**
+    3. **When a tool returns calculations, data, or analysis, reproduce it entirely in your response**
+    4. **Your role is to orchestrate and relay information, not to summarize it**
+
+    # Example of INCORRECT behavior:
+    User: "Calculate the VaR for my portfolio"
+    Tool returns: [detailed VaR calculation with numbers]
+    WRONG Response: "I have calculated the VaR for your portfolio. Please see the details in the message."
+
+    # Example of CORRECT behavior:
+    User: "Calculate the VaR for my portfolio"
+    Tool returns: [detailed VaR calculation with numbers]
+    CORRECT Response: "I've calculated the VaR for your portfolio. Here are the results:
+    [Include ALL the details from the tool response]"
+
+    # Instructions
+    - Pass through ALL information received from tools
+    - Format the information nicely for readability, but don't omit anything
+    - Add brief contextual explanations only if needed, but always include the full data
     """
 
     FORMAT_INSTRUCTION = (
