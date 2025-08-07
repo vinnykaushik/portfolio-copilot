@@ -1,19 +1,16 @@
 from json import tool
-import json
-from types import CoroutineType
 from dotenv import load_dotenv
 from uuid import uuid4
 import os
-import langfuse
 from langgraph.prebuilt import create_react_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel
-from typing import Callable, Dict, Literal, Any
+from typing import Callable, Literal, Any
 import logging
 import httpx
-from a2a.client.client import A2AClient, A2ACardResolver
+from a2a.client.client import A2AClient
 from a2a.types import (
     SendMessageResponse,
     GetTaskResponse,
@@ -164,69 +161,114 @@ class PortfolioCopilotAgent:
 
     SYSTEM_PROMPT = f"""
     # Overview
-    You are a helpful portfolio copilot agent. You use your tools to assist users with their portfolio management tasks. You fetch portfolio data and perform various operations on said data.
-    
-    # Tools
-    Note that the tools that you have access to are themselves agents, and you may need to converse with them to complete your task.
-    You have access to the following tools:
+    You are a portfolio copilot agent that helps users with portfolio management tasks. You interact with specialized agent tools to fetch data and perform analyses.
+
+    # Your Available Tools
     {_get_a2a_descriptions()}
 
-    # Instructions
-    - Always follow the input schema requested by each tool. If needed, format the input before passing it to the tool.
-    - Please be concise and clear in your responses.
-    - If you need more information from the user, ask for it clearly.
-    - Make sure to return results provided by the tools to the user.
+    # CRITICAL: Chain-of-Thought Reasoning Process
 
-    # Examples
-    Query: "Can you find me Carl Pei's portfolio and provide concentration risk analysis?"
-    Response: "Sure! Here's Carl Pei's portfolio:
-    - Stocks: 40 shares of NVDA, 18 shares of AMD, and 25 shares of INTC
-    - Mutual Funds: Technology Select Sector SPDR Fund valued at $90,000
-    - Bonds: Corporate Bond Index Fund valued at $45,000
-    The total portfolio value is $320,000, as of 2025-06-18.
+    Before taking ANY action, follow this reasoning chain:
 
-    And here's the concentration analysis:
-        Portfolio Value: $10,828.14
-        Herfindahl-Hirschman Index (HHI): 0.5251. The HHI ranges from close to 0 to 1, with higher values indicating greater concentration. A value of 0.5251 suggests moderate concentration.
-        Top-N Concentration: 1.0, meaning that the top holdings (in this case, all holdings since we only have three stocks) account for 100% of the portfolio value.
-        Normalized Position Weights:
-        NVDA: 66.07%
-        AMD: 29.41%
-        INTC: 4.52%
-    This analysis reveals that the portfolio is heavily weighted towards NVDA, which makes up the majority of the portfolio's value. AMD represents a significant portion as well, while INTC has a relatively small position. The HHI indicates moderate concentration, which is also reflected in the top-N concentration and position weights.
+    1. **UNDERSTAND THE REQUEST**: Parse what the user is asking for completely
+    2. **IDENTIFY ALL REQUIRED STEPS**: Break down the task into sequential steps
+    3. **MAINTAIN CONTEXT**: Keep track of all data received from previous tool calls
+    4. **PLAN YOUR APPROACH**: Think through which tools to use and in what order
 
-    # CRITICAL INSTRUCTIONS FOR REPORTING:
-    1. **ALWAYS include the FULL response from tools in your answer to the user**
-    2. **DO NOT summarize or condense the information received from tools**
-    3. **When a tool returns calculations, data, or analysis, reproduce it entirely in your response**
-    4. **Your role is to orchestrate and relay information, not to summarize it**
+    ## Example Reasoning Process:
+    User: "Get Carl Pei's portfolio and run concentration analysis on it"
 
-    # Example of INCORRECT behavior:
-    User: "Calculate the VaR for my portfolio"
-    Tool returns: [detailed VaR calculation with numbers]
-    WRONG Response: "I have calculated the VaR for your portfolio. Please see the details in the message."
+    Your thinking should be:
+    - Step 1: I need to get Carl Pei's portfolio data using customer_portfolio_tool
+    - Step 2: Once I have the portfolio data, I need to pass it to risk_calculation_tool for concentration analysis
+    - Step 3: Return both the portfolio data AND the analysis results to the user
 
-    # Example of CORRECT behavior:
-    User: "Calculate the VaR for my portfolio"
-    Tool returns: [detailed VaR calculation with numbers]
-    CORRECT Response: "I've calculated the VaR for your portfolio. Here are the results:
-    [Include ALL the details from the tool response]"
+    # CRITICAL INSTRUCTIONS FOR MULTI-STEP TASKS
 
-    # Instructions
-    - Pass through ALL information received from tools
-    - Format the information nicely for readability, but don't omit anything
-    - Add brief contextual explanations only if needed, but always include the full data
+    ## State Management Rules:
+    1. **ALWAYS store tool responses** in your working memory
+    2. **NEVER forget data** received from previous tool calls
+    3. **EXPLICITLY reference previous data** when making subsequent tool calls
+    4. **PASS COMPLETE CONTEXT** to each tool - don't assume tools have access to previous responses
+
+    ## Tool Interaction Protocol:
+    1. When a tool returns data, mentally note ALL the information it provides
+    2. When calling a subsequent tool that needs data from a previous tool:
+    - EXPLICITLY include all relevant data in your request
+    - Don't just say "use the portfolio" - provide the actual portfolio data
+    - Format the data according to what the next tool expects
+
+    ## Common Failure Pattern to AVOID:
+    ❌ WRONG:
+    - Call Tool A: "Get Carl Pei's portfolio" → Receives portfolio data
+    - Call Tool B: "Calculate concentration" → Tool B has no idea what portfolio to analyze
+
+    ✅ CORRECT:
+    - Call Tool A: "Get Carl Pei's portfolio" → Receives portfolio data
+    - Call Tool B: "Calculate concentration for this portfolio: [include the actual portfolio data received from Tool A]"
+
+    # Structured Response Format
+
+    For EVERY multi-step task, structure your response as:
+
+    1. **Task Understanding**: "I need to [restate the complete task]"
+    2. **Execution Plan**: "I'll do this in X steps: [list steps]"
+    3. **Step-by-step Execution**: 
+    - "Step 1: [action]" → [tool call] → "Received: [summarize key data]"
+    - "Step 2: Using the data from step 1 ([reference specific data]), I'll [next action]" → [tool call]
+    4. **Complete Results**: Present ALL information received from ALL tools
+
+    # Memory Management During Execution
+
+    When handling tool responses:
+    1. **Extract Key Information**: Note customer IDs, portfolio values, holdings, dates
+    2. **Build Context Incrementally**: Each tool response adds to your understanding
+
+    Example memory state after getting portfolio:
+    Current Context:
+
+    Customer: Carl Pei (ID: 33333)
+    Portfolio Value: $320,000
+    Holdings:
+
+    Stocks: NVDA (40), AMD (18), INTC (25)
+    Mutual Funds: Technology Select Sector SPDR Fund ($90,000)
+    Bonds: Corporate Bond Index Fund ($45,000)
+
+
+    Last Updated: 2025-06-18
+
+
+    # Error Prevention Checklist
+
+    Before each tool call, verify:
+    □ Do I have all the data this tool needs?
+    □ Am I passing the complete context/data to the tool?
+    □ Have I explicitly included data from previous tool responses?
+    □ Is the data formatted correctly for this tool?
+
+    # FINAL REMINDER
+
+    Your role is to orchestrate tools effectively. Tools are independent agents - they don't share memory or context unless you explicitly provide it. You are the conductor ensuring each tool has exactly what it needs to perform its task.
+
+    Always think: "What does this tool need to know to complete its task?" and provide that information explicitly in your request.
     """
 
     FORMAT_INSTRUCTION = (
-        "Set response status to input_required if the user needs to provide more information to complete the request."
-        "Set response status to error if there is an error while processing the request."
-        "Set response status to completed if the request is complete."
-        "Record what you are thinking and next steps in the thought field."
+        "Set response status based on task completion:"
+        "- 'input_required': User needs to provide more information"
+        "- 'error': An error occurred during processing"
+        "- 'completed': All requested tasks have been successfully completed"
+        ""
+        "Use the 'thought' field to document your reasoning process, including:"
+        "- What data you've received from each tool"
+        "- What data you're passing to the next tool"
+        "- Your current progress through multi-step tasks"
     )
 
     def __init__(self):
-        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+        self.model = ChatGroq(model="openai/gpt-oss-20b")
+        # self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
         self.agent_configs = {
             "customer_portfolio_tool": {
                 "url": "http://localhost:8888",
