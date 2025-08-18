@@ -11,6 +11,7 @@ dependencies = [
     "langchain-google-genai>=2.1.5",
     "langchain-groq>=0.3.7",
     "langchain-mcp-adapters>=0.1.7",
+    "langchain-openai>=0.3.30",
     "langfuse>=3.1.3",
     "langgraph>=0.4.9",
     "scipy>=1.16.0",
