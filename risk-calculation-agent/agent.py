@@ -184,6 +184,10 @@ Your capabilities are limited to the tools available to you, which are listed be
 # Tools
 {tool_descriptions}
 
+# Important
+- Format the input to the tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
+- If a tool call is rejected due to malformed input, reformat the input data to match the tool's schema and try again.
+
 # Instructions
 - Use the tools to perform calculations and return results in a structured format.
 - Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
@@ -210,7 +214,7 @@ class RiskCalculationAgent:
     )
 
     def __init__(self):
-        self.model = ChatGroq(model="gemma2-9b-it")
+        self.model = ChatGroq(model="openai/gpt-oss-20b")
         self.tools = tools  # Use pre-initialized tools
         logger.info(f"Creating Risk Calculation Agent graph with tools {self.tools}")
 
