@@ -1,19 +1,16 @@
 from json import tool
-import json
-from types import CoroutineType
 from dotenv import load_dotenv
 from uuid import uuid4
 import os
-import langfuse
 from langgraph.prebuilt import create_react_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel
-from typing import Dict, Literal, Any
+from typing import Callable, Literal, Any
 import logging
 import httpx
-from a2a.client.client import A2AClient, A2ACardResolver
+from a2a.client.client import A2AClient
 from a2a.types import (
     SendMessageResponse,
     GetTaskResponse,
@@ -98,61 +95,6 @@ def _print_json_response(response: Any, description: str) -> str:
     return answer
 
 
-@tool
-async def customer_portfolio_tool(message: str) -> str | None:
-    """Sends a message to the customer portfolio agent and returns the response."""
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
-            global customer_portfolio_client
-            customer_portfolio_client = await A2AClient.get_client_from_agent_card_url(
-                httpx_client, "http://localhost:8888"
-            )
-            logger.info("✅ Connected to the customer portfolio agent.")
-            return await _send_message_to_a2a_agent(message, customer_portfolio_client)
-    except Exception as e:
-        logger.error(f"Error connecting to the customer portfolio agent: {e}")
-        return "Error connecting to the customer portfolio agent."
-
-
-@tool
-async def risk_calculation_tool(message: str) -> str | None:
-    """Sends a message to the customer portfolio agent and returns the response."""
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
-            global risk_calculation_agent
-            risk_calculation_agent = await A2AClient.get_client_from_agent_card_url(
-                httpx_client, "http://localhost:9999"
-            )
-            logger.info("✅ Connected to the risk calculation agent.")
-            return await _send_message_to_a2a_agent(message, risk_calculation_agent)
-    except Exception as e:
-        logger.error(f"Error connecting to the risk calculation agent: {e}")
-        return "Error connecting to the risk calculation agent."
-
-
-@tool
-async def performance_tracking_tool(message: str) -> str | None:
-    """Sends a message to the performance tracking agent and returns the response."""
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
-            global performance_tracking_agent
-            performance_tracking_agent = await A2AClient.get_client_from_agent_card_url(
-                httpx_client,
-                "https://performance-tracking-agent-906909573150.us-central1.run.app",
-                http_kwargs={
-                    "auth": (
-                        TRACKING_AUTH_USERNAME,
-                        TRACKING_AUTH_PASSWORD,
-                    )
-                },
-            )
-            logger.info("✅ Connected to the performance tracking agent.")
-            return await _send_message_to_a2a_agent(message, performance_tracking_agent)
-    except Exception as e:
-        logger.error(f"Error connecting to the performance tracking agent: {e}")
-        return "Error connecting to the performance tracking agent."
-
-
 async def _send_message_to_a2a_agent(message: str, client: A2AClient) -> str | None:
     """Sends a message to an A2A agent and retrieves the response."""
     try:
@@ -218,47 +160,187 @@ class ResponseFormat(BaseModel):
 class PortfolioCopilotAgent:
 
     SYSTEM_PROMPT = f"""
-    # Overview
-    You are a helpful portfolio copilot agent. You use your tools to assist users with their portfolio management tasks. You fetch portfolio data and perform various operations on said data.
-    
-    # Tools
-    Note that the tools that you have access to are themselves agents, and you may need to converse with them to complete your task.
-    You have access to the following tools:
+    # Portfolio Copilot Agent
+
+    You help users with portfolio management by coordinating specialized agent tools to fetch data and perform analyses.
+
+    ## Available Tools
     {_get_a2a_descriptions()}
 
-    # Instructions
-    - Always follow the input schema requested by each tool. If needed, format the input before passing it to the tool.
-    - Please be concise and clear in your responses.
-    - If you need more information from the user, ask for it clearly.
-    - Make sure to return results provided by the tools to the user.
+    ## Core Principle: Tools Don't Share Context
+    Each tool is independent - you must explicitly pass all required data between tools.
 
+    ## Multi-Step Task Protocol
+
+    ### 1. Before Acting
+    - Parse the complete request
+    - List all required steps
+    - Plan tool usage order
+
+    ### 2. During Execution
+    **Critical**: Store and reuse data from each tool response
+
+    ❌ **Wrong**: 
+    - Tool A: "Get portfolio" → receives data
+    - Tool B: "Analyze" → fails (no context)
+
+    ✅ **Correct**:
+    - Tool A: "Get portfolio" → receives data
+    - Tool B: "Analyze this portfolio: [include actual data from Tool A]"
+
+    ### 3. Response Structure
+    1. "I need to [restate task]"
+    2. "Steps: [list]"
+    3. Execute each step, showing:
+    - Action → Tool call → "Received: [key data]"
+    - Reference previous data explicitly in next calls
+    4. Present complete results from all tools
+
+    ## Pre-Call Checklist
+    - [ ] Have all required data?
+    - [ ] Passing complete context?
+    - [ ] Data formatted correctly?
+    - [ ] Including previous responses?
+
+    Remember: You orchestrate independent tools - always provide complete context.
     """
 
     FORMAT_INSTRUCTION = (
-        "Set response status to input_required if the user needs to provide more information to complete the request."
-        "Set response status to error if there is an error while processing the request."
-        "Set response status to completed if the request is complete."
-        "Record what you are thinking and next steps in the thought field."
+        "Set response status based on task completion:"
+        "- 'input_required': User needs to provide more information"
+        "- 'error': An error occurred during processing"
+        "- 'completed': All requested tasks have been successfully completed"
+        ""
+        "Use the 'thought' field to document your reasoning process, including:"
+        "- What data you've received from each tool"
+        "- What data you're passing to the next tool"
+        "- Your current progress through multi-step tasks"
     )
 
     def __init__(self):
-        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
-        self.tools = [
-            customer_portfolio_tool,
-            risk_calculation_tool,
-            performance_tracking_tool,
-        ]
+        self.model = ChatGroq(model="openai/gpt-oss-120b")
+        # self.model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        self.agent_configs = {
+            "customer_portfolio_tool": {
+                "url": "http://localhost:8888",
+                "auth_required": False,
+            },
+            "risk_calculation_tool": {
+                "url": "http://localhost:9999",
+                "auth_required": False,
+            },
+            "performance_tracking_tool": {
+                "url": "https://performance-tracking-agent-906909573150.us-central1.run.app",
+                "auth_required": True,
+            },
+        }
+
+        # Dynamically create tools
+        self.tools = self._create_tools_dynamically()
+
         logger.info("🏃‍➡️ Creating Portfolio Copilot Agent...")
-        logger.info(f"Using tools: {_get_a2a_descriptions()}")
+        logger.info(f"Using tools: {[tool for tool in self.tools]}")
+
         self.agent = create_react_agent(
             model=self.model,
             tools=self.tools,
             name="portfolio_copilot_agent",
-            prompt="You are a helpful portfolio copilot agent.",
+            prompt=self.SYSTEM_PROMPT,
             response_format=(self.FORMAT_INSTRUCTION, ResponseFormat),
             checkpointer=InMemorySaver(),
-            # store=InMemoryStore(),
         )
+
+    def _create_tools_dynamically(self) -> list:
+        """Dynamically create tool functions based on agent configurations."""
+        tools = []
+
+        for agent_name, config in self.agent_configs.items():
+            # Fetch agent card
+            agent_card = self._fetch_agent_card(config["url"])
+
+            # Create tool function
+            tool_func = self._create_tool_function(
+                agent_name=agent_name,
+                base_url=config["url"],
+                agent_card=agent_card,
+                auth_required=config["auth_required"],
+            )
+
+            tools.append(tool_func)
+
+        return tools
+
+    def _fetch_agent_card(self, base_url: str) -> dict:
+        """Fetch agent card from the given URL."""
+        try:
+            if base_url.startswith("https"):
+                response = httpx.get(base_url + "/.well-known/agent.json", verify=False)
+            else:
+                response = httpx.get(base_url + "/.well-known/agent.json")
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to fetch agent card from {base_url}: {e}")
+            return {}
+
+    def _create_tool_function(
+        self, agent_name: str, base_url: str, agent_card: dict, auth_required: bool
+    ) -> Callable:
+        """Create a tool function with proper description from agent card."""
+
+        # Build comprehensive description
+        skills_desc = []
+        examples = []
+
+        for skill in agent_card.get("skills", []):
+            skills_desc.append(f"- {skill['name']}: {skill['description']}")
+            examples.extend(skill.get("examples", []))
+
+        skills_text = "\n".join(skills_desc)
+        examples_text = ", ".join(
+            examples[:5]
+        )  # Limit examples to avoid too long descriptions
+
+        tool_description = f"""{agent_card.get('description', 'Agent for ' + agent_name)}
+
+Available capabilities:
+{skills_text}
+
+Example queries: {examples_text}"""
+
+        # Create the actual tool function
+        async def tool_function(message: str) -> str:
+            """This docstring will be replaced dynamically."""
+            try:
+                async with httpx.AsyncClient(timeout=TIMEOUT_SETTINGS) as httpx_client:
+                    http_kwargs = {}
+                    if auth_required:
+                        http_kwargs["auth"] = (
+                            TRACKING_AUTH_USERNAME,
+                            TRACKING_AUTH_PASSWORD,
+                        )
+
+                    client = await A2AClient.get_client_from_agent_card_url(
+                        httpx_client,
+                        base_url,
+                        http_kwargs=http_kwargs if http_kwargs else None,
+                    )
+                    logger.info(f"✅ Connected to {agent_name}")
+                    return (
+                        await _send_message_to_a2a_agent(message, client)
+                        or "No response"
+                    )
+            except Exception as e:
+                logger.error(f"Error connecting to {agent_name}: {e}")
+                return f"Error connecting to {agent_name}."
+
+        # Set function metadata
+        tool_function.__name__ = agent_name
+        tool_function.__doc__ = tool_description
+
+        # Apply the @tool decorator
+        decorated_tool = tool(tool_function)
+
+        return decorated_tool
 
     async def ainvoke_with_tracing(self, messages, config) -> dict[str, Any]:
         """Get response from the agent synchronously"""

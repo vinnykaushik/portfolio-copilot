@@ -6,10 +6,11 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "a2a>=0.44",
-    "a2a-sdk>=0.2.10",
+    "a2a-sdk==0.2.10",
     "asyncio>=3.4.3",
     "dotenv>=0.9.9",
     "langchain-google-genai>=2.1.6",
+    "langchain-groq>=0.3.7",
     "langfuse>=3.2.0",
     "langgraph>=0.5.0",
     "langmem>=0.0.27",

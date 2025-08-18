@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from httpx import get
 from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
@@ -183,6 +184,10 @@ Your capabilities are limited to the tools available to you, which are listed be
 # Tools
 {tool_descriptions}
 
+# Important
+- Format the input to the tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
+- If a tool call is rejected due to malformed input, reformat the input data to match the tool's schema and try again.
+
 # Instructions
 - Use the tools to perform calculations and return results in a structured format.
 - Format the input for tools according to the schema definitions provided in the tool descriptions. Always ensure that the input matches the expected schema.
@@ -190,8 +195,6 @@ Your capabilities are limited to the tools available to you, which are listed be
 - When presenting results, format them clearly and explain what each metric means.
 - If asked about portfolio analysis, break down the results by investment type and provide insights.
 """
-
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
 
 
 class ResponseFormat(BaseModel):
@@ -211,7 +214,7 @@ class RiskCalculationAgent:
     )
 
     def __init__(self):
-        self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+        self.model = ChatGroq(model="openai/gpt-oss-20b")
         self.tools = tools  # Use pre-initialized tools
         logger.info(f"Creating Risk Calculation Agent graph with tools {self.tools}")
 
